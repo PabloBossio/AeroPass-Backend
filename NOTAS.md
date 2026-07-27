@@ -130,6 +130,7 @@ Ojo de sintaxis: con más de un atributo en `@Query` (`value` y `nativeQuery`), 
 
 - **Postman**: cuidado con el dropdown de método (GET por defecto) — si no lo cambiás a POST/PUT/DELETE explícitamente, tu request pega contra el endpoint equivocado y puede darte una respuesta "válida" (200 OK) que no es la que esperabas.
 - HikariCP: pool de conexiones a la base de datos que usa Spring Boot por defecto (reutiliza conexiones en vez de abrir una nueva por request).
+- **Windows: puerto ocupado después de cortar una ejecución a mitad de camino.** Si se detiene el proceso "a la fuerza" (o queda colgado) puede dejar un `java.exe` viejo escuchando en el puerto de Tomcat (8080), y el siguiente intento de levantar la app falla con "puerto en uso". Diagnóstico: `netstat -ano | findstr :8080` muestra el PID que lo tiene tomado. Si `netstat`/`taskkill` no se reconocen como comando (problema de PATH), usar la ruta completa: `C:\Windows\System32\netstat.exe` / `C:\Windows\System32\taskkill.exe /PID <pid> /F`. Alternativa sin línea de comandos: buscar el proceso en el Administrador de Tareas y finalizarlo ahí.
 
 ---
 
@@ -209,6 +210,56 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 ---
 
+## Documentación con Swagger / OpenAPI
+
+- **`springdoc-openapi`** (para Spring Boot 4: `springdoc-openapi-starter-webmvc-ui`, versión 3.0.3) genera documentación interactiva de la API **automáticamente** a partir de lo que ya existe: escanea los `@RestController`/`@GetMapping`/`@PostMapping`/etc. y los campos/validaciones de los DTOs, sin escribir nada extra como baseline. Expone dos cosas por defecto: la UI interactiva en `/swagger-ui.html` y el spec crudo en JSON en `/v3/api-docs`.
+- **Bug real: Swagger UI tapado por la regla de seguridad por defecto.** `anyRequest().authenticated()` (la regla de cierre de `SecurityConfig`) bloquea con 403 cualquier ruta nueva que no esté explícitamente permitida — y `/swagger-ui.html` es una ruta nueva para Spring Security, aunque la haya "creado" una librería. Solución: agregar una regla `permitAll()` explícita, **antes** de la regla de cierre (mismo principio de "orden importa, lo más específico primero" que ya se usa en el resto de `SecurityConfig`), para las **tres** rutas necesarias (la página HTML, sus assets JS/CSS, y el JSON que esos assets van a pedir):
+```java
+.requestMatchers(
+        "/swagger-ui.html",
+        "/swagger-ui/**",
+        "/v3/api-docs/**"
+).permitAll()
+```
+- **JWT Bearer auth dentro de Swagger UI**: para poder probar endpoints protegidos desde el botón "Try it out" (que si no, siempre da 403 por no mandar ningún token), hace falta un bean `OpenAPI` propio que declare un esquema de seguridad. Las clases (`OpenAPI`, `Info`, `Components`, `SecurityRequirement`, `SecurityScheme`) vienen de `io.swagger.v3.oas.models.*` — una librería de modelo aparte (`swagger-core`), independiente de la versión de Spring Boot:
+```java
+@Configuration
+public class OpenApiConfig {
+
+    @Bean
+    public OpenAPI customOpenAPI() {
+        final String securitySchemeName = "bearerAuth";
+        return new OpenAPI()
+                .info(new Info()
+                        .title("Aerolinea API")
+                        .description("API REST para la gestión de vuelos, reservas, aviones y usuarios de una aerolínea. Autenticación vía JWT.")
+                        .version("1.0"))
+                .addSecurityItem(new SecurityRequirement().addList(securitySchemeName))
+                .components(new Components()
+                        .addSecuritySchemes(securitySchemeName,
+                                new SecurityScheme()
+                                        .name(securitySchemeName)
+                                        .type(SecurityScheme.Type.HTTP)
+                                        .scheme("bearer")
+                                        .bearerFormat("JWT")));
+    }
+}
+```
+  `.info(...)` pone el título/descripción que aparecen arriba de todo en Swagger UI. `.addSecurityItem(...)` aplica el requisito de seguridad globalmente a todas las operaciones documentadas. `.components().addSecuritySchemes(...)` registra el esquema reutilizable, lo que hace aparecer el botón "Authorize" con un campo para pegar el token crudo (Swagger UI antepone el prefijo "Bearer " solo).
+- **Bug real (recurrencia del mismo bug-family de siempre): faltaba `@Bean` sobre `customOpenAPI()`.** Sin esa anotación, el método sigue siendo Java válido — no da error de compilación ni en el arranque — pero Spring nunca lo registra como bean, así que el esquema de seguridad nunca se agrega al `OpenAPI` real, y el botón "Authorize"/`securitySchemes` simplemente no aparece en `/v3/api-docs`, sin ningún error visible en consola. Mismo patrón que ya pasó antes con `@PostMapping`/`@GetMapping`/`@Test` faltantes: **una anotación de Spring "faltante" nunca es un error de compilación — es Java válido que Spring ignora en silencio, y el síntoma aparece después, indirecto.** Lección: ante un comportamiento "no pasa nada, ni funciona ni tira error", sospechar primero de una anotación faltante antes que de un bug de lógica.
+- **Bug real de compilación: confundir una variable local con una clase.** `.type(securitySchemeName.Type.HTTP)` — `securitySchemeName` es un `String` (variable local), no la clase `SecurityScheme`, así que no tiene un `.Type` anidado. Corrección: `.type(SecurityScheme.Type.HTTP)`, usando la clase. Típicamente lo sugiere mal el autocompletado del IDE por tener un nombre parecido cerca.
+- **`@Tag(name = ..., description = ...)`** (`io.swagger.v3.oas.annotations.tags.Tag`), a nivel de clase sobre cada controller: le pone nombre/descripción legible al grupo de endpoints en Swagger UI (por defecto sale un nombre feo tipo `avion-controller`, autogenerado del nombre de la clase).
+- **`@Operation(summary = ..., description = ...)`** y **`@ApiResponses({ @ApiResponse(responseCode = ..., description = ...), ... })`** (`io.swagger.v3.oas.annotations.Operation` / `.responses.ApiResponse(s)`), a nivel de método: documentan qué hace cada endpoint y qué códigos de estado HTTP puede devolver.
+- **Principio clave — precisión documental, no copiar/pegar el mismo bloque en todos lados.** Los códigos de estado documentados en `@ApiResponses` tienen que salir de revisar el código real, no de una plantilla genérica:
+  - La regla real de `SecurityConfig` para esa ruta+verbo puntual (`permitAll` → no hace falta documentar 403; `hasRole`/`authenticated` → sí).
+  - Las excepciones reales que puede tirar el service subyacente, cruzadas contra `GlobalExceptionHandler` (`RecursoNoEncontradoException` → 404, `ReglaDeNegocioException` → 400, validación de `@Valid` → 400).
+  - Documentar un código que en la práctica **nunca puede pasar** (ej. un 404 en un endpoint cuyo service nunca valida existencia) es peor que no documentarlo — engaña a quien consuma la API sobre qué manejo de errores necesita hacer. Un test ya existente y pasando (ej. uno que prueba explícitamente un caso de 404) es la mejor prueba de que un código sí es real y hay que documentarlo.
+- **Sintaxis de array de anotaciones**: dentro de `@ApiResponses({ ... })` cada `@ApiResponse` es un elemento de un array de anotaciones — necesitan coma entre ellos, igual que un array normal. Una **coma final después del último elemento es válida** (no es un bug), pero una **coma faltante entre dos elementos es error de compilación**.
+- **Login (`/api/auth/login`) con manejo de credenciales inválidas**: como `authenticationManager.authenticate(...)` se llama manualmente dentro del controller (no dentro de la cadena de filtros de seguridad), una excepción ahí no la traduce automáticamente el mecanismo estándar de Spring Security — hay que capturarla explícitamente. Se resolvió agregando un `@ExceptionHandler(BadCredentialsException.class)` más en el `GlobalExceptionHandler` ya existente (devolviendo 401), en vez de un `try/catch` local en el controller — mantiene el mismo patrón centralizado que ya se usaba para el resto de las excepciones del proyecto.
+- **Limpieza de código de aprendizaje inicial**: se eliminó `HelloController`/`HelloService`, el típico endpoint de prueba ("hola mundo") armado al empezar a aprender Spring Boot. Una vez que la API real tiene su propia documentación prolija con Swagger, dejar ese tipo de endpoints vestigiales sin relación con el dominio solo ensucia la doc (aparecería como un grupo suelto sin `@Tag`) y no aporta nada — se confirma con la suite de tests completa que nada dependía de esas clases antes de borrarlas.
+
+---
+
 ## Próximos temas pendientes (roadmap)
 
 1. ~~Entidad `Avion` (relación `@ManyToOne` desde `Vuelo`)~~ ✅
@@ -216,5 +267,5 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 3. ~~Entidad `Reserva` (relaciona `Usuario` + `Vuelo`, lógica de negocio con transacciones reales)~~ ✅
 4. ~~Seguridad con Spring Security + JWT sobre `Usuario`/roles~~ ✅
 5. ~~Testing con JUnit + Mockito~~ ✅
-6. Documentación con Swagger/OpenAPI
+6. ~~Documentación con Swagger/OpenAPI~~ ✅
 7. Repaso final y buenas prácticas
