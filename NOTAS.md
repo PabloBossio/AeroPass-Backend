@@ -260,6 +260,51 @@ public class OpenApiConfig {
 
 ---
 
+## Frontend en React (consumiendo la API)
+
+A diferencia de todo el backend (que siempre escribiste vos, yo solo explicaba), el frontend lo armé yo directamente — el objetivo acá no era que aprendas a programar en React línea por línea, sino que entiendas la arquitectura general y cómo se conecta con tu propia API. Igual, algunos conceptos valen la pena quedar anotados:
+
+- **CORS (Cross-Origin Resource Sharing)**: el navegador bloquea por defecto que JavaScript corriendo en un origen (`http://localhost:5173`, el frontend) llame a una API en otro origen (`http://localhost:8080`, el backend) — distinto puerto ya cuenta como "otro origen". El servidor tiene que declarar explícitamente qué orígenes permite. En Spring Security se hace con un bean `CorsConfigurationSource` (orígenes, métodos y headers permitidos) conectado a la cadena de filtros con `.cors(cors -> cors.configurationSource(...))`.
+- **Bug real / gap de diseño encontrado al conectar el frontend**: `LoginResponseDTO` no devolvía el `id` del usuario — solo `token`, `email`, `rol`. Sin el `id`, el frontend no tenía forma de armar una reserva (`POST /api/reservas` necesita `usuarioId`), y no había ningún endpoint público para que un usuario común consultara su propio id (`GET /api/usuarios/**` es solo `ADMIN`). Se resolvió agregando el campo `id` a `LoginResponseDTO`. Buen ejemplo de cómo construir un cliente real para tu API expone huecos de diseño que no se notan probando solo con Postman/Swagger a mano.
+- **Vite**: la herramienta estándar actual para arrancar un proyecto de React (reemplaza a `create-react-app`, que React oficialmente discontinuó en 2025). Sirve el proyecto en desarrollo con recarga instantánea y arma el build de producción.
+- **Componentes + JSX**: React arma la UI como funciones de JavaScript que devuelven "JSX" (HTML mezclado con JS). Cada página (`LoginPage`, `VuelosPage`, `MisReservasPage`) es un componente.
+- **`useState`/`useEffect`** (hooks de React): `useState` guarda un valor que, al cambiar, hace que el componente se vuelva a renderizar (ej. la lista de vuelos, un mensaje de error). `useEffect` ejecuta código al montarse el componente — se usa para pedir los datos a la API apenas se abre la página.
+- **Context API (`AuthContext`)**: el equivalente en React a un estado "global" — evita tener que pasar manualmente "quién está logueado" de componente en componente. Cualquier página puede preguntar `useAuth()` y saber el usuario actual.
+- **`react-router-dom`**: define las rutas de una SPA (Single Page Application) sin recargar la página completa en cada navegación. `ProtectedRoute` es el equivalente, del lado del cliente, a las reglas de `SecurityConfig`: si no hay usuario logueado, redirige a `/login` antes de mostrar una página protegida — aunque ojo, **esto no reemplaza la seguridad real del backend**, es solo una mejora de experiencia de usuario (la protección de verdad la sigue haciendo Spring Security del lado del servidor).
+- **`axios` + interceptor**: librería para llamadas HTTP. Un interceptor de request agrega automáticamente el header `Authorization: Bearer <token>` a cada llamada saliente si hay un token guardado, sin repetir esa lógica en cada función.
+- **`localStorage` para guardar el JWT**: simple y estándar para un proyecto de aprendizaje corriendo en el navegador del propio usuario. En un proyecto con mayores exigencias de seguridad se prefiere una cookie `httpOnly` (no accesible desde JavaScript, protege mejor contra robo de token vía XSS).
+- **Bug real (de manejo de terminal, no de código)**: `npm install` tirando `ENOENT ... Could not read package.json` porque la terminal estaba parada en una carpeta distinta a la del proyecto (`C:\Users\Usuario` en vez de la carpeta donde estaba el `package.json`). `npm install`/`npm run dev` siempre corren en base a la carpeta actual de la terminal — hay que `cd` hasta la carpeta correcta primero.
+- **Aviso de `npm` sobre `allow-scripts` (esbuild)**: versiones recientes de npm no corren automáticamente el script `postinstall` de algunos paquetes por seguridad. En este caso no hizo falta intervenir — Vite arrancó bien igual.
+
+---
+
+## Troubleshooting de Windows: instalación de Docker Desktop / WSL2
+
+Esta parte no tiene que ver con Spring Boot, pero vale la pena documentarla porque fue un troubleshooting real en capas, con el mismo método de siempre (diagnosticar con evidencia real antes de asumir nada):
+
+- **Síntoma inicial**: comandos básicos de Windows (`netstat`, `taskkill`, `wsl`, `msiexec`, `dism`) no se reconocían como comando, pero funcionaban con `.\` adelante o con ruta completa.
+- **Causa raíz encontrada**: la variable de entorno `Path` **del sistema** (no la de usuario) tenía sobrescritas las rutas núcleo de Windows (`C:\Windows\system32`, `C:\Windows`, etc.) — el valor arrancaba directamente con una ruta de Oracle Java, señal de que algún instalador viejo (un bug conocido de instaladores de Java antiguos) reemplazó el `Path` completo en vez de agregarle su ruta al final. Se diagnosticó viendo el valor completo con `[System.Environment]::GetEnvironmentVariable('Path','Machine')`, y se solucionó agregando de nuevo las rutas núcleo desde Variables de entorno → Variables del sistema → Path → Editar.
+- **Segundo hallazgo**: el servicio de Windows Update (`wuauserv`) estaba **deshabilitado**, y encima `mmc.exe` (la consola que usa `services.msc` para administrar servicios) estaba **bloqueado por una política** ("un administrador bloqueó esta aplicación"). Ambas cosas, sumadas al `Path` roto, apuntan a que el service técnico que reinstaló Windows (~5 meses atrás, por un cambio de disco) usó una copia con activación no oficial — este tipo de herramientas suele deshabilitar Windows Update a propósito (para que no se detecte/revierta la activación) y bloquear las consolas de administración para que no se pueda revertir fácil.
+- **Salida práctica sin tener que "curar" Windows Update por completo**: `wsl --update --web-download` baja el kernel de WSL2 directo de internet, sin pasar por Windows Update ni por Microsoft Store — esquivó todo el problema de raíz para lograr el objetivo puntual (tener WSL2 funcionando para poder correr Docker Desktop).
+- **Lección general**: cuando varios comandos de sistema fallan "no se reconoce" al mismo tiempo, sospechar de el `PATH` antes que de cada comando individual. Y cuando un servicio de Windows no arranca, el error de `net start`/`net stop` (código de error + mensaje en español) suele decir exactamente cuál es el problema real (deshabilitado, sin permisos, etc.) — leerlo con atención antes de probar cosas al azar.
+
+---
+
+## Docker: dockerizar MySQL y el backend
+
+- **Imagen vs contenedor**: una imagen es la "plantilla" (código + dependencias + sistema de archivos empaquetados); un contenedor es una instancia corriendo de esa imagen — como la relación entre una clase y un objeto.
+- **`docker-compose.yml`**: un archivo que describe uno o más "servicios" (contenedores) y cómo se relacionan entre sí (puertos, variables de entorno, volúmenes, dependencias de arranque). Con `docker compose up -d` se levanta todo junto de una vez, en segundo plano (`-d` = detached).
+- **Volúmenes con nombre** (`volumes: mysql_data:/var/lib/mysql`): Docker administra dónde vive físicamente ese volumen; los datos sobreviven aunque se borre y recree el contenedor. Sin volumen, perder el contenedor significa perder los datos.
+- **Redes internas de Docker Compose / resolución por nombre de servicio**: los contenedores de un mismo `docker-compose.yml` se pueden llamar entre sí usando el **nombre del servicio** como si fuera un hostname (ej. `PMA_HOST: mysql`, o `SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/...`) — Docker arma esa resolución de nombres solo. Importante: `localhost` **adentro** de un contenedor se refiere a sí mismo, nunca a otro contenedor.
+- **Variables de entorno pisan `application.properties`**: Spring Boot mapea automáticamente variables de entorno en MAYÚSCULAS_CON_GUION_BAJO (ej. `SPRING_DATASOURCE_URL`) a la propiedad equivalente (`spring.datasource.url`), sin tocar el archivo. Así el mismo proyecto corre con `localhost` desde IntelliJ y con el nombre del servicio Docker cuando está containerizado, sin duplicar configuración.
+- **`healthcheck` + `depends_on: condition: service_healthy`**: `depends_on` sin más solo espera a que el contenedor **arranque**, no a que el servicio esté realmente listo para recibir conexiones — un `healthcheck` (ej. `mysqladmin ping`) verifica el estado real, y `condition: service_healthy` hace que otro servicio (el backend) espere ese chequeo antes de arrancar. Esto evita el bug real que sí sufrimos manualmente una vez (ver abajo).
+- **Bug real: la primera vez que un contenedor de MySQL arranca con un volumen vacío, se reinicia internamente.** El propio proceso de inicialización (crear la base, el usuario, aplicar el `MYSQL_DATABASE`) hace que el servidor arranque, se reinicie, y recién ahí quede definitivamente arriba. Si algo intenta conectarse justo en esa ventana, falla — por eso el `healthcheck` de arriba es la solución real (no un simple `sleep`).
+- **`Dockerfile` multi-stage**: una primera etapa (`FROM eclipse-temurin:21-jdk AS build`) tiene todo lo necesario para compilar (JDK completo + Maven Wrapper), y una segunda etapa final (`FROM eclipse-temurin:21-jre`) solo copia el `.jar` ya compilado (`COPY --from=build`) sin arrastrar herramientas de build a la imagen que se corre. Copiar primero `pom.xml` y bajar dependencias, y recién después copiar `src`, aprovecha el cacheo de capas de Docker (cambiar solo el código no obliga a re-bajar todas las dependencias).
+- **Bug real: `Public Key Retrieval is not allowed`.** Error de MySQL 8 (no de credenciales ni de red): el método de autenticación por defecto (`caching_sha2_password`) necesita intercambiar una clave pública con el cliente, y el driver no lo permite por defecto sin conexión cifrada. Se agrega `allowPublicKeyRetrieval=true` a la URL JDBC (seguro para desarrollo local sin TLS real). El error aparece enterrado varias líneas dentro de un stack trace larguísimo — el mensaje de más arriba (`Unable to determine Dialect without JDBC metadata`) es solo el síntoma genérico de "no pude conectarme", hay que bajar hasta encontrar la causa real (`Caused by:` más profundo).
+- Con esto, XAMPP queda completamente reemplazado: MySQL, phpMyAdmin y el propio backend corren los tres en contenedores Docker, coordinados por un solo `docker-compose.yml`.
+
+---
+
 ## Próximos temas pendientes (roadmap)
 
 1. ~~Entidad `Avion` (relación `@ManyToOne` desde `Vuelo`)~~ ✅
@@ -268,4 +313,7 @@ public class OpenApiConfig {
 4. ~~Seguridad con Spring Security + JWT sobre `Usuario`/roles~~ ✅
 5. ~~Testing con JUnit + Mockito~~ ✅
 6. ~~Documentación con Swagger/OpenAPI~~ ✅
-7. Repaso final y buenas prácticas
+7. ~~Frontend en React (login, vuelos, reservas)~~ ✅
+8. Dockerizar el proyecto (MySQL + backend, reemplazando XAMPP)
+9. Deploy (Aiven MySQL + Render backend + Vercel frontend)
+10. Repaso final y buenas prácticas
