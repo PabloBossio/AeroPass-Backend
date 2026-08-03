@@ -1,5 +1,6 @@
 package com.pablo.aerolinea.controller;
 
+import com.pablo.aerolinea.dto.CambioRolDTO;
 import com.pablo.aerolinea.dto.UsuarioRequestDTO;
 import com.pablo.aerolinea.dto.UsuarioResponseDTO;
 import com.pablo.aerolinea.mapper.UsuarioMapper;
@@ -65,5 +66,18 @@ public class UsuarioController {
                 .map(UsuarioMapper::toResponseDTO)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
+    }
+
+    @Operation(summary = "Cambiar rol de un usuario", description = "Actualiza el rol de un usuario existente.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Rol actualizado con exito"),
+            @ApiResponse(responseCode = "400", description = "Rol inválido o faltante"),
+            @ApiResponse(responseCode = "403", description = "No auntenticado o sin rol ADMIN"),
+            @ApiResponse(responseCode = "404", description = "No existe un usuario con ese id.")
+    })
+    @PutMapping("/{id}/rol")
+    public ResponseEntity<UsuarioResponseDTO> actualizarRol(@PathVariable Long id, @Valid @RequestBody CambioRolDTO request) {
+        Usuario actualizado = usuarioService.actualizarRol(id, request.getRol());
+        return ResponseEntity.ok(UsuarioMapper.toResponseDTO(actualizado));
     }
 }
