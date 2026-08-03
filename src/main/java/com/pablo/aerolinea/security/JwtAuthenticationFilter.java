@@ -1,5 +1,6 @@
 package com.pablo.aerolinea.security;
 
+import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -36,17 +37,23 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
 
         String token = authHeader.substring(7);
-        String email = jwtUtil.extraerEmail(token);
 
-        if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-            UserDetails userDetails = usuarioDetailsService.loadUserByUsername(email);
+        try {
+            String email = jwtUtil.extraerEmail(token);
 
-            if (jwtUtil.esTokenValido(token, email)) {
-                UsernamePasswordAuthenticationToken authToken =
-                        new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
+            if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+                UserDetails userDetails = usuarioDetailsService.loadUserByUsername(email);
 
-                SecurityContextHolder.getContext().setAuthentication(authToken);
+                if (jwtUtil.esTokenValido(token, email)) {
+                    UsernamePasswordAuthenticationToken authToken =
+                            new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
+
+                    SecurityContextHolder.getContext().setAuthentication(authToken);
+                }
             }
+        } catch (JwtException | IllegalArgumentException e) {
+            //Token vencido, corrupto o mal formado: no autenticamos a nadie,
+            //el request sigue como si no hubiera venido ningún token.
         }
 
         filterChain.doFilter(request, response);

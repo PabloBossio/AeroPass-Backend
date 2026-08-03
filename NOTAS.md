@@ -305,6 +305,36 @@ Esta parte no tiene que ver con Spring Boot, pero vale la pena documentarla porq
 
 ---
 
+## Deploy en producción: Aiven (MySQL) + Render (backend) + Vercel (frontend)
+
+Con esto el proyecto pasó de "corre en mi máquina" a estar accesible en internet, con tres proveedores distintos coordinados entre sí. Mismo método de siempre: cada pieza se probó de forma aislada antes de conectar la siguiente, y cada bug se diagnosticó con evidencia real antes de suponer nada.
+
+- **Elección de proveedores**: Aiven (MySQL, capa gratuita real sin tarjeta, se auto-apaga por inactividad pero se reactiva solo), Render (backend Dockerizado, capa free duerme a los 15 min sin tráfico), Vercel (frontend, estándar de la industria para SPAs). Se descartó Railway porque su capa gratuita dejó de ser de uso continuo (solo un crédito inicial de prueba).
+
+**Bug real, el más importante de todo este módulo: `Access denied` que en realidad no era ni de red ni de credenciales.** Al probar la conexión a Aiven desde `application.properties`, aparecía `java.sql.SQLException: Access denied for user 'avnadmin'@'<ip>' (using password: YES)`. La primera sospecha (razonable) fue un firewall/IP allowlist de Aiven — pero un bloqueo de red nunca llega a generar ese mensaje puntual, porque lo emite el propio servidor MySQL *después* de aceptar la conexión y evaluar credenciales; un firewall real da timeout o "connection refused", nunca "access denied... using password". Para descartar variables una por una, se probó la conexión **fuera de Spring por completo**, con un cliente de mysql aislado en un contenedor descartable:
+```
+docker run --rm -it mysql:8.0 mysql -h <host> -P <puerto> -u avnadmin -p <db>
+```
+Esa conexión anduvo perfecto — confirmando que las credenciales y la red estaban bien, y que el problema estaba en cómo Java leía el archivo. La causa real: al pegar la URL de Aiven en `application.properties`, quedó **pegada sin salto de línea justo después del valor de la contraseña** (`spring.datasource.password=abc123spring.datasource.url=jdbc:...`). En un archivo `.properties`, una "línea" sigue siendo la misma hasta el próximo salto de línea real — así que la contraseña que Java estaba mandando en realidad era la contraseña real + toda la URL pegada atrás. Lección: ante cualquier "access denied" con contraseña que "debería ser correcta", conviene aislar la conexión de la capa de la aplicación (un cliente de base de datos directo) antes de sospechar de la infraestructura de red.
+
+- **Verificar sin poder ver la contraseña en pantalla**: el cliente de `mysql` oculta la contraseña por completo al tipearla (ni siquiera asteriscos) — comportamiento normal, no significa que la terminal "no deja escribir". En Windows, si el prompt interactivo de contraseña realmente no acepta ningún input (ni con Enter), alternativa práctica: pasar la contraseña directo en el comando, sin prompt interactivo: `-pLA_CONTRASEÑA` (pegado, sin espacio) o vía variable de entorno `-e MYSQL_PWD=...` (evita que quede en el historial de la shell).
+- **Riesgo real de dejar una sesión de `mysql>` abierta sin salir**: si escribís un comando de la shell (`docker compose stop`) *dentro* del prompt `mysql>` por error (por ejemplo, en la misma ventana de terminal que quedó abierta de una prueba anterior), mysql lo interpreta como el inicio de una sentencia SQL sin terminar y se queda esperando (`->`). Se sale con `\c` (cancela la sentencia a medio escribir) y después `exit;` (cierra el cliente).
+
+- **`server.port=${PORT:8080}` en `application.properties`**: Render (como la mayoría de plataformas de hosting) le inyecta a tu contenedor una variable de entorno `PORT` (en Render, `10000` por defecto) y espera que la aplicación escuche exactamente ahí — si tu app sigue fija en el 8080 sin leer esa variable, Render nunca detecta que el servicio levantó ("no open ports detected"), aunque adentro del contenedor todo esté funcionando bien. La sintaxis `${PORT:8080}` le dice a Spring "usá la variable de entorno `PORT` si existe, si no, `8080` por defecto" — así el mismo `application.properties` sirve para local (sin esa variable) y para Render (que sí la define).
+- **Variables de entorno en Render/Vercel = el mismo mecanismo que `docker-compose.yml`, en la nube.** Así como local las variables de entorno del compose pisaban `application.properties` sin tocar el archivo, en Render se configuran `SPRING_DATASOURCE_URL`/`USERNAME`/`PASSWORD` en el panel del servicio (apuntando a Aiven) — el mismo código corre distinto según el entorno, sin ningún `if` ni archivo separado por ambiente.
+- **`docker-compose.yml` no se usa para nada en Render.** Cada servicio de Render corresponde a un solo contenedor/imagen — Render solo lee el `Dockerfile`. El `mysql` y `phpmyadmin` del compose quedan afuera de este esquema: Aiven reemplaza a MySQL, y phpMyAdmin era una herramienta de desarrollo local que no tiene sentido en producción.
+- **Permisos de la GitHub App al conectar Render/Vercel**: si el repo no aparece en la lista al crear el servicio, no es un bug — la app de GitHub que usa Render/Vercel solo puede ver los repos que le diste acceso explícitamente al instalarla. Se soluciona yendo a la configuración de la instalación de esa app en GitHub (`github.com/apps/<app>/installations/new` o el link que ofrezca la propia plataforma) y agregando el repo faltante a la lista de "Repository access".
+- **Variables de entorno de Vite (`VITE_...`) se "hornean" en el momento del build, no en tiempo de ejecución** — a diferencia de las variables de Spring Boot, que se leen cada vez que arranca el proceso. Por eso `VITE_API_URL` no se edita en el `.env` local para producción: se configura directo en el panel de Vercel, y ese valor queda fijo dentro del bundle de JS generado en cada deploy.
+
+- **CORS en producción — un origen nuevo por cada dominio real.** El `CorsConfigurationSource` del backend tenía permitido solo `http://localhost:5173`. Al desplegar el frontend en Vercel, con una URL nueva (`https://algo.vercel.app`), el navegador bloqueó los pedidos con el error clásico `has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present`. Se soluciona agregando la URL real de producción a la lista de `setAllowedOrigins(...)`, junto (no en reemplazo) de la de `localhost`, para poder seguir desarrollando local sin problemas.
+
+- **El problema de "quién crea al primer admin"**: no existe forma de crear un usuario `ADMIN` vía la API pública, porque esa misma API exige ser `ADMIN` para crearlos (y está bien que sea así — nunca se debe confiar en un rol que mande el cliente al registrarse). Con una base de datos nueva en Aiven, sin ningún admin todavía, se resuelve **por fuera de la API**: conectarse directo a la base (mismo cliente de mysql aislado de antes) y promover a mano al primer usuario con una consulta SQL (`UPDATE usuarios SET rol = 'ADMIN' WHERE email = '...'`). Es una operación de bootstrap manual, puntual, que se hace una sola vez por entorno.
+- **Dato importante después de promover a un usuario a mano**: el JWT que ya tenías de ese usuario queda "viejo" — como el rol se graba dentro del token en el momento del login (claim `rol`), cambiar la base no actualiza tokens ya emitidos. Hay que volver a loguearse para conseguir un token nuevo que refleje el rol actualizado (aunque, como está anotado más arriba, la *autorización real* de cada request en este proyecto se recalcula siempre fresca contra la base vía `UsuarioDetailsService`, no contra el claim del JWT — el token viejo en este proyecto puntual seguiría funcionando bien igual; loguearse de nuevo es más que nada para tener un `LoginResponseDTO` consistente con la realidad).
+
+- **Higiene de secretos con git**: durante las pruebas de conexión a Aiven se cambió temporalmente `application.properties` para apuntar a producción con la contraseña real en texto plano — antes de continuar, se confirmó explícitamente que ese cambio **nunca se subió a git** (no se hizo commit de esa versión). Si se llega a commitear una contraseña real por error, no alcanza con borrarla del archivo después: git guarda el historial completo, así que además hay que rotar/resetear esa contraseña en el proveedor (Aiven, en este caso) para invalidar la que quedó expuesta.
+
+---
+
 ## Próximos temas pendientes (roadmap)
 
 1. ~~Entidad `Avion` (relación `@ManyToOne` desde `Vuelo`)~~ ✅
@@ -314,6 +344,6 @@ Esta parte no tiene que ver con Spring Boot, pero vale la pena documentarla porq
 5. ~~Testing con JUnit + Mockito~~ ✅
 6. ~~Documentación con Swagger/OpenAPI~~ ✅
 7. ~~Frontend en React (login, vuelos, reservas)~~ ✅
-8. Dockerizar el proyecto (MySQL + backend, reemplazando XAMPP)
-9. Deploy (Aiven MySQL + Render backend + Vercel frontend)
+8. ~~Dockerizar el proyecto (MySQL + backend, reemplazando XAMPP)~~ ✅
+9. ~~Deploy (Aiven MySQL + Render backend + Vercel frontend)~~ ✅
 10. Repaso final y buenas prácticas
