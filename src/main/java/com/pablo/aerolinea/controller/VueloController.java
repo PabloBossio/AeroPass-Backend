@@ -41,6 +41,20 @@ public class VueloController {
         return ResponseEntity.status(HttpStatus.CREATED).body(VueloMapper.toResponseDto(creado));
     }
 
+    @Operation(summary = "Editar vuelo", description = "Actualiza los datos de un vuelo existente.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Vuelo actualizado con exito."),
+            @ApiResponse(responseCode = "400", description = "Datos invalidos"),
+            @ApiResponse(responseCode = "403", description = "No autenticado o sin rol ADMIN"),
+            @ApiResponse(responseCode = "404", description = "No existe un vuelo o avion con ese id")
+    })
+
+    @PutMapping("/{id}")
+    public ResponseEntity<VueloResponseDto> editar(@PathVariable Long id, @Valid @RequestBody VueloRequestDto request) {
+        Vuelo actualizado = vueloService.editarVuelo(id, VueloMapper.toEntity(request), request.getAvionId());
+        return ResponseEntity.ok(VueloMapper.toResponseDto(actualizado));
+    }
+
     @Operation(summary = "Listar vuelos", description = "Devuelve todos los vuelos registrasdos")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Listado devuelto correctamente"),
@@ -77,6 +91,20 @@ public class VueloController {
         return vueloService.buscarPorOrigenYDestino(origen, destino).stream()
                 .map(VueloMapper::toResponseDto)
                 .toList();
+    }
+
+    @Operation(summary = "Eliminar vuelo", description = "Elimina un vuelo existente, siempre que no tenga reservas asociadas.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "204", description = "Vuelo eliminado con exito"),
+            @ApiResponse(responseCode = "400", description = "El vuelo tiene reservas asociadas y no se puede eliminar"),
+            @ApiResponse(responseCode = "403", description = "No autenticado o sin rol ADMIN"),
+            @ApiResponse(responseCode = "404", description = "No existe un vuelo con ese id")
+    })
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> eliminar(@PathVariable Long id) {
+        vueloService.eliminarVuelo(id);
+        return ResponseEntity.noContent().build();
     }
 
 }

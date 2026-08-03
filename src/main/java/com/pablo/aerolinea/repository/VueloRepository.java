@@ -17,6 +17,7 @@ public interface VueloRepository extends JpaRepository<Vuelo, Long>{
 
     List<Vuelo> findByEstado(EstadoVuelo estado);
 
+    List<Vuelo> findByAvionId(Long avionId);
 
     @Query(value = "SELECT * FROM vuelos  WHERE id = :id FOR UPDATE", nativeQuery = true)
     Optional<Vuelo> buscarPorIdConBloqueo(@Param("id") Long id);

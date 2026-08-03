@@ -26,6 +26,10 @@ public class ReservaService {
         this.usuarioRepository = usuarioRepository;
     }
 
+    public List<Reserva> listarTodas() {
+        return reservaRepository.findAll();
+    }
+
     public List<Reserva> listarPorUsuario(Long usuarioId) {
         return reservaRepository.findByUsuarioId(usuarioId);
     }

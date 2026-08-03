@@ -55,6 +55,19 @@ public class ReservaController {
         return ResponseEntity.ok(ReservarMapper.toResponseDTO(cancelada));
     }
 
+    @Operation(summary = "Listar todas las reservas", description = "Devuelve todas las reservas del sistema. Solo ADMIN.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Listado devuelto con exito"),
+            @ApiResponse(responseCode = "403", description = "No autenticado o sin rol ADMIN")
+    })
+
+    @GetMapping
+    public List<ReservaResponseDTO> listarTodas() {
+        return reservaService.listarTodas().stream()
+                .map(ReservarMapper::toResponseDTO)
+                .toList();
+    }
+
     @Operation(summary = "Buscar reservas por usuarios", description = "Busca las reservas realizadas por un usuario puntual")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Listado devuelto correctamente"),

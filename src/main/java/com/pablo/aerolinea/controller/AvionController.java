@@ -69,6 +69,19 @@ public class AvionController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
+    @Operation(summary = "Editar un avion", description = "Actualiza los datos de un avion existente.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Avion actualizado con exito"),
+            @ApiResponse(responseCode = "400", description = "Datos inválidos o matrícula duplicada"),
+            @ApiResponse(responseCode = "403", description = "No autenticado o sin rol ADMIN"),
+            @ApiResponse(responseCode = "404", description = "No existe un avion con ese id")
+    })
+
+    @PutMapping("/{id}")
+    public ResponseEntity<AvionResponseDTO> editar(@PathVariable Long id, @Valid @RequestBody AvionRequestDTO request) {
+        Avion actualizado = avionService.editarAvion(id, AvionMapper.toEntity(request));
+        return ResponseEntity.ok(AvionMapper.toResponseDTO(actualizado));
+    }
 
 
 }
