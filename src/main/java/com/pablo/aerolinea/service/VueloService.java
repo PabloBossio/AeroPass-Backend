@@ -65,7 +65,7 @@ public class VueloService {
         vueloExistente.setFechaSalida(datosNuevos.getFechaSalida());
         vueloExistente.setFechaLlegada(datosNuevos.getFechaLlegada());
         vueloExistente.setAsientosDisponibles(datosNuevos.getAsientosDisponibles());
-        vueloExistente.setAvion(datosNuevos.getAvion());
+        vueloExistente.setAvion(avion);
 
         return vueloRepository.save(vueloExistente);
     }
