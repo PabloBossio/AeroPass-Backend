@@ -2,6 +2,8 @@ package com.pablo.aerolinea.controller;
 
 import com.pablo.aerolinea.config.SecurityConfig;
 import com.pablo.aerolinea.dto.AvionRequestDTO;
+import com.pablo.aerolinea.exception.RecursoNoEncontradoException;
+import com.pablo.aerolinea.exception.ReglaDeNegocioException;
 import com.pablo.aerolinea.model.Avion;
 import com.pablo.aerolinea.security.JwtUtil;
 import com.pablo.aerolinea.security.UsuarioDetailsService;
@@ -146,4 +148,83 @@ public class AvionControllerTest {
         mockMvc.perform(get("/api/aviones/99"))
                 .andExpect(status().isNotFound());
     }
-}
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void editar_conDatosValidos_deeberiaDevolver200() throws Exception {
+        AvionRequestDTO request = new AvionRequestDTO();
+        request.setModelo("Boeing 737 MAX");
+        request.setMatricula("ABC123");
+        request.setCapacidad(190);
+        request.setAerolinea("Aerolineas Argentinas");
+
+        Avion avionActualizado = Avion.builder()
+                .id(1L)
+                .modelo("Boeing 737 MAX")
+                .matricula("ABC123")
+                .capacidad(190)
+                .aerolinea("Aerolineas Argentinas")
+                .build();
+
+        when(avionService.editarAvion(any(Long.class), any(Avion.class))).thenReturn(avionActualizado);
+
+        mockMvc.perform(put("/api/aviones/1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.modelo").value("Boeing 737 MAX"))
+                .andExpect(jsonPath("$.capacidad").value(190));
+    }
+
+    @Test
+    @WithAnonymousUser
+    void editar_sinAutenticacion_deberiaDevolver403() throws Exception {
+        AvionRequestDTO request = new AvionRequestDTO();
+        request.setModelo("Boeing 737 MAX");
+        request.setMatricula("ABC123");
+        request.setCapacidad(190);
+        request.setAerolinea("Aerolineas Argentinas");
+
+        mockMvc.perform(put("/api/aviones/1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void editar_conAvionInexistente_deberiaDevolver404() throws Exception {
+        AvionRequestDTO request = new AvionRequestDTO();
+        request.setModelo("Boeing 737 MAX");
+        request.setMatricula("ABC123");
+        request.setCapacidad(190);
+        request.setAerolinea("Aerolineas Argentinas");
+
+        when(avionService.editarAvion(any(Long.class), any(Avion.class)))
+                .thenThrow(new RecursoNoEncontradoException("No existe un avión con id: 99"));
+
+        mockMvc.perform(put("/api/aviones/99")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void editar_conMatriculaDuplicada_deberiaDevolver400() throws Exception {
+        AvionRequestDTO request = new AvionRequestDTO();
+        request.setModelo("Boeing 737 MAX");
+        request.setMatricula("XYZ789");
+        request.setCapacidad(190);
+        request.setAerolinea("Aerolineas Argentinas");
+
+        when(avionService.editarAvion(any(Long.class), any(Avion.class)))
+                .thenThrow(new ReglaDeNegocioException("Ya existe otro avión registrado con la matricula: XYZ789"));
+
+        mockMvc.perform(put("/api/aviones/1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest());
+    }
+
+ }

@@ -14,6 +14,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -171,5 +172,18 @@ public class ReservaServiceTest {
         assertThrows(ReglaDeNegocioException.class, () -> reservaService.cancelarReserva(5L));
 
         verify(vueloRepository, never()).save(any());
+    }
+
+    @Test
+    void listarTodas_deberiaDevolverTodasLasReservas() {
+        Reserva reserva1 = Reserva.builder().id(1L).estado(EstadoReserva.CONFIRMADA).build();
+        Reserva reserva2 = Reserva.builder().id(2L).estado(EstadoReserva.CANCELADA).build();
+
+        when(reservaRepository.findAll()).thenReturn(List.of(reserva1, reserva2));
+
+        var resultado = reservaService.listarTodas();
+
+        assertEquals(2, resultado.size());
+        verify(reservaRepository, times(1)).findAll();
     }
 }

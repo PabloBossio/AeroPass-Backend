@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.when;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -191,4 +192,85 @@ public class VueloControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].origen").value("Buenos Aires"));
     }
-}
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void editar_conDatosValidos_deberiaDevolver200() throws Exception {
+        when(vueloService.editarVuelo(any(Long.class), any(Vuelo.class), any(Long.class)))
+                .thenReturn(vueloCreado());
+
+        mockMvc.perform(put("/api/vuelos/1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(requestValido())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.origen").value("Buenos Aires"));
+    }
+
+    @Test
+    @WithAnonymousUser
+    void editar_sinAutenticacion_deberiaDevolver403() throws Exception {
+        mockMvc.perform(put("/api/vuelos/1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(requestValido())))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void editar_conVueloInexistente_deberiaDevolver404() throws Exception {
+        when(vueloService.editarVuelo(any(Long.class), any(Vuelo.class), any(Long.class)))
+                .thenThrow(new RecursoNoEncontradoException("No existe un vuelo con ese id: 99"));
+
+            mockMvc.perform(put("/api/vuelos/99")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(requestValido())))
+                    .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void editar_conReglaDeNegocioViolada_deberiaDevolver400() throws Exception {
+        when(vueloService.editarVuelo(any(Long.class), any(Vuelo.class), any(Long.class)))
+                .thenThrow(new ReglaDeNegocioException("La fecha de llegada no puede ser anterior a la de salida."));
+
+            mockMvc.perform(put("/api/vuelos/1")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(requestValido())))
+                    .andExpect(status().isBadRequest());
+
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void eliminar_conIdExistente_deberiaDevolver204() throws Exception {
+        mockMvc.perform(delete("/api/vuelos/1"))
+                        .andExpect(status().isNoContent());
+    }
+
+    @Test
+    @WithAnonymousUser
+    void eliminar_sinAutenticacion_deberiaDevolver403() throws Exception {
+        mockMvc.perform(delete("/api/vuelos/1"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void eliminar_conVueloInexistente_deberiaDevolver404() throws Exception {
+        doThrow(new RecursoNoEncontradoException("No existe un vuelo con ese id: 99"))
+                .when(vueloService).eliminarVuelo(99L);
+
+        mockMvc.perform(delete("/api/vuelos/99"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void eliminar_conReservasAsociadas_deberiaDevolver400() throws Exception {
+        doThrow(new ReglaDeNegocioException("No se puede eliminar el vuelo: tiene reservas asociadas."))
+                .when(vueloService).eliminarVuelo(1L);
+
+        mockMvc.perform(delete("/api/vuelos/1"))
+                .andExpect(status().isBadRequest());
+    }
+ }

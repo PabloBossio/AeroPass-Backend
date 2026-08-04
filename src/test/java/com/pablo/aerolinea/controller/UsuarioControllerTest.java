@@ -1,7 +1,9 @@
 package com.pablo.aerolinea.controller;
 
 import com.pablo.aerolinea.config.SecurityConfig;
+import com.pablo.aerolinea.dto.CambioRolDTO;
 import com.pablo.aerolinea.dto.UsuarioRequestDTO;
+import com.pablo.aerolinea.exception.RecursoNoEncontradoException;
 import com.pablo.aerolinea.exception.ReglaDeNegocioException;
 import com.pablo.aerolinea.model.Rol;
 import com.pablo.aerolinea.model.Usuario;
@@ -154,5 +156,58 @@ public class UsuarioControllerTest {
 
         mockMvc.perform(get("/api/usuarios/99"))
                 .andExpect(status().isNotFound());
+    }
+
+    private CambioRolDTO cambioRolValido() {
+        CambioRolDTO dto = new CambioRolDTO();
+        dto.setRol(Rol.ADMIN);
+        return dto;
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void actualizarRol_conDatosValidos_deberiaDevovler200() throws Exception {
+        Usuario usuarioActualizado = usuarioCreado();
+        usuarioActualizado.setRol(Rol.ADMIN);
+
+        when(usuarioService.actualizarRol(1L, Rol.ADMIN)).thenReturn(usuarioActualizado);
+
+        mockMvc.perform(put("/api/usuarios/1/rol")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(cambioRolValido())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rol").value("ADMIN"));
+    }
+
+    @Test
+    @WithMockUser(roles = "USUARIO")
+    void actualizarRol_conRolUsuario_deberiaDevolver403() throws Exception {
+        mockMvc.perform(put("/api/usuarios/1/rol")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(cambioRolValido())))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void actualizarRol_conUsuarioInexistente_deberiaDevovler404() throws Exception {
+        when(usuarioService.actualizarRol(99L, Rol.ADMIN))
+                .thenThrow(new RecursoNoEncontradoException("No exite un usuario con ese id: 99"));
+
+        mockMvc.perform(put("/api/usuarios/99/rol")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(cambioRolValido())))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void actualizarRol_conRolFaltante_deberiaDevolver400() throws Exception {
+        CambioRolDTO request = new CambioRolDTO();
+
+        mockMvc.perform(put("/api/usuarios/1/rol")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest());
     }
 }

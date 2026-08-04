@@ -203,4 +203,27 @@ public class ReservaControllerTest {
                 .andExpect(status().isNotFound());
     }
 
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void listarTodas_conRolAdmin_deberiaDevolverListaReservas() throws Exception {
+        when(reservaService.listarTodas()).thenReturn(List.of(reservaCreada()));
+
+        mockMvc.perform(get("/api/reservas"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].estado").value("CONFIRMADA"));
+    }
+
+    @Test
+    @WithAnonymousUser
+    void listarTodas_sinAutenticacion_deberiaDevolver403() throws Exception {
+        mockMvc.perform(get("/api/reservas"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @WithMockUser(roles = "USUARIO")
+    void listarTodas_conRolUsuario_deberiaDevolver403() throws Exception {
+        mockMvc.perform(get("/api/reservas"))
+                .andExpect(status().isForbidden());
+    }
 }

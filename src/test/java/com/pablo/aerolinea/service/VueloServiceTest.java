@@ -6,6 +6,7 @@ import com.pablo.aerolinea.model.Avion;
 import com.pablo.aerolinea.model.EstadoVuelo;
 import com.pablo.aerolinea.model.Vuelo;
 import com.pablo.aerolinea.repository.AvionRepository;
+import com.pablo.aerolinea.repository.ReservaRepository;
 import com.pablo.aerolinea.repository.VueloRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -28,6 +29,9 @@ public class VueloServiceTest {
 
     @Mock
     private AvionRepository avionRepository;
+
+    @Mock
+    private ReservaRepository reservaRepository;
 
     @InjectMocks
     private VueloService vueloService;
@@ -119,5 +123,90 @@ public class VueloServiceTest {
         assertThrows(ReglaDeNegocioException.class, () -> vueloService.crearVuelo(vuelo, 1L));
 
         verify(vueloRepository, never()).save(any());
+    }
+
+    @Test
+    void editarVuelo_conDatosValidos_deberiaActualizarYReasignarAvion() {
+        Avion avionOriginal = avionValido();
+        Vuelo vueloExistente = vueloValido();
+        vueloExistente.setAvion(avionOriginal);
+
+        Avion avionNuevo = Avion.builder()
+                .id(2L)
+                .modelo("Airbus A320")
+                .matricula("XYZ987")
+                .capacidad(150)
+                .aerolinea("Aerolineas Argentinas")
+                .build();
+
+        Vuelo datosNuevos = vueloValido();
+        datosNuevos.setDestino("Roma");
+
+        when(vueloRepository.findById(1L)).thenReturn(Optional.of(vueloExistente));
+        when(avionRepository.findById(2L)).thenReturn(Optional.of(avionNuevo));
+        when(vueloRepository.save(any(Vuelo.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Vuelo resultado = vueloService.editarVuelo(1L, datosNuevos, 2L);
+
+        assertEquals("Roma", resultado.getDestino());
+        assertEquals(avionNuevo, resultado.getAvion());
+        verify(vueloRepository, times(1)).save(vueloExistente);
+    }
+
+    @Test
+    void editarVuelo_conVueloInexistente_deberiaLanzarRecursoNoEncontrado() {
+        Vuelo datosNuevos = vueloValido();
+
+        when(vueloRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThrows(RecursoNoEncontradoException.class, () -> vueloService.editarVuelo(99L, datosNuevos, 1L));
+
+        verify(vueloRepository, never()).save(any());
+    }
+
+    @Test
+    void editarVuelo_conAvionInexistente_deberiaLanzarRecursoNoEncontrado() {
+        Vuelo vueloExistente = vueloValido();
+        Vuelo datosNuevos = vueloValido();
+
+        when(vueloRepository.findById(1L)).thenReturn(Optional.of(vueloExistente));
+        when(avionRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThrows(RecursoNoEncontradoException.class, () -> vueloService.editarVuelo(1L, datosNuevos , 99L));
+
+        verify(vueloRepository, never()).save(any());
+    }
+
+    @Test
+    void eliminarVuelo_sinReservas_deberiaEliminarCorrectamente() {
+        Vuelo vuelo = vueloValido();
+
+        when(vueloRepository.findById(1L)).thenReturn(Optional.of(vuelo));
+        when(reservaRepository.existsByVueloId(1L)).thenReturn(false);
+
+        vueloService.eliminarVuelo(1L);
+
+        verify(vueloRepository, times(1)).delete(vuelo);
+    }
+
+    @Test
+    void eliminarVuelo_conReservasAsociadas_deberiaLanzarReglaDeNegocio() {
+        Vuelo vuelo = vueloValido();
+
+        when(vueloRepository.findById(1L)).thenReturn(Optional.of(vuelo));
+        when(reservaRepository.existsByVueloId(1L)).thenReturn(true);
+
+        assertThrows(ReglaDeNegocioException.class, () -> vueloService.eliminarVuelo(1L));
+
+        verify(vueloRepository, never()).delete(any());
+    }
+
+    @Test
+    void eliminarVuelo_conVueloInexistente_deberiaLanzarRecursoNoEncontrado() {
+        when(vueloRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThrows(RecursoNoEncontradoException.class,() -> vueloService.eliminarVuelo(99L));
+
+        verify(vueloRepository, never()).delete(any());
     }
 }
