@@ -13,6 +13,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -79,5 +80,16 @@ public class UsuarioController {
     public ResponseEntity<UsuarioResponseDTO> actualizarRol(@PathVariable Long id, @Valid @RequestBody CambioRolDTO request) {
         Usuario actualizado = usuarioService.actualizarRol(id, request.getRol());
         return ResponseEntity.ok(UsuarioMapper.toResponseDTO(actualizado));
+    }
+
+    @Operation(summary = "Obtener mi perfil", description = "Devuelve los datos del usuario autenticado actualmente, identificado por su JWT")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Perfil devuelto con exito"),
+            @ApiResponse(responseCode = "400", description = "No autenticado")
+    })
+    @GetMapping("/me")
+    public ResponseEntity<UsuarioResponseDTO> obtenerMiPerfil(Authentication authentication) {
+        Usuario usuario = usuarioService.buscarPorEmail(authentication.getName());
+        return ResponseEntity.ok(UsuarioMapper.toResponseDTO(usuario));
     }
 }

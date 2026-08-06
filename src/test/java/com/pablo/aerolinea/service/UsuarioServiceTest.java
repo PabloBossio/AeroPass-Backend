@@ -92,4 +92,28 @@ public class UsuarioServiceTest {
 
         verify(usuarioRepository, never()).save(any());
     }
+
+    @Test
+    void buscarPorEmail_conEmailExistente_deberiaDevolverElUsuario() {
+        Usuario usuario = Usuario.builder()
+                .id(1L)
+                .nombre("Juan Perez")
+                .email("juan.perez@gmail.com")
+                .password("hashXYZ")
+                .rol(Rol.USUARIO)
+                .build();
+
+        when(usuarioRepository.findByEmail("juan.perez@gmail.com")).thenReturn(Optional.of(usuario));
+
+        Usuario resultado = usuarioService.buscarPorEmail("juan.perez@gmail.com");
+
+        assertEquals("Juan Perez", resultado.getNombre());
+    }
+
+    @Test
+    void buscarPorEmail_conEmailInexistente_deberiaLanzarRecursoNoEncontrado() {
+        when(usuarioRepository.findByEmail("nadie@gmail.com")).thenReturn(Optional.empty());
+
+        assertThrows(RecursoNoEncontradoException.class, () -> usuarioService.buscarPorEmail("nadie@gmail.com"));
+    }
 }

@@ -45,4 +45,9 @@ public class UsuarioService {
         usuario.setRol(nuevoRol);
         return usuarioRepository.save(usuario);
     }
+
+    public Usuario buscarPorEmail(String email) {
+        return usuarioRepository.findByEmail(email)
+                .orElseThrow(() -> new RecursoNoEncontradoException("No existe un usuario con ese email: " + email));
+    }
 }

@@ -210,4 +210,21 @@ public class UsuarioControllerTest {
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest());
     }
+
+    @Test
+    @WithMockUser(username = "juan.perez@gmail.com", roles = "USUARIO")
+    void obtenerMiPerfil_conUsuarioAutenticado_deberiaDevolver200() throws Exception {
+        when(usuarioService.buscarPorEmail("juan.perez@gmail.com")).thenReturn(usuarioCreado());
+
+        mockMvc.perform(get("/api/usuarios/me"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.email").value("juan.perez@gmail.com"));
+    }
+
+    @Test
+    @WithAnonymousUser
+    void obtenerMiPerfil_sinAutenticacion_deberiaDevolver403() throws Exception {
+        mockMvc.perform(get("/api/usuarios/me"))
+                .andExpect(status().isForbidden());
+    }
 }
