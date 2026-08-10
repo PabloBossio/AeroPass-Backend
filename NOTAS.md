@@ -385,6 +385,44 @@ A diferencia del backend (siempre escrito por vos), esta parte la construí yo d
 
 ---
 
+## Cierre del rediseño: endpoint `GET /api/usuarios/me`
+
+Cierre del gap de diseño que había quedado anotado en el módulo anterior: la página de Perfil no podía mostrar el `nombre` real del usuario porque `GET /api/usuarios/{id}` es `hasRole("ADMIN")` por diseño, y el `LoginResponseDTO` nunca trajo el nombre.
+
+**Backend (escrito por vos, como siempre):**
+- `UsuarioService.buscarPorEmail(String email)`: nuevo método, mismo patrón que `buscarPorId` pero buscando por email (`usuarioRepository.findByEmail(...).orElseThrow(...)`).
+- `UsuarioController.obtenerMiPerfil(Authentication authentication)`: nuevo `GET /api/usuarios/me`. La clave es el parámetro `Authentication` — Spring Security lo inyecta automáticamente con el principal autenticado, y `authentication.getName()` devuelve el username (en este proyecto, el email, porque así se diseñó `UsuarioDetailsService`). Con eso alcanza para buscar "quién soy" sin ningún id en la URL — a diferencia de `GET /api/usuarios/{id}`, acá no hay forma de que un usuario pida los datos de otro, porque el id nunca lo manda el cliente.
+- **Orden de reglas en `SecurityConfig`, otra vez importa**: hubo que agregar `.requestMatchers(HttpMethod.GET, "/api/usuarios/me").authenticated()` **antes** de la regla ya existente `.requestMatchers(HttpMethod.GET, "/api/usuarios/**").hasRole("ADMIN")` — si hubiera quedado después, la regla más genérica (que matchea `/me` porque `/**` incluye cualquier sufijo) hubiera ganado primero y bloqueado a cualquier usuario no-ADMIN. Mismo principio ya documentado varias veces en este archivo: reglas específicas antes que las genéricas que las contienen.
+- Tests en las dos capas, incluido uno pensado explícitamente como regresión: `obtenerMiPerfil_conUsuarioAutenticado_deberiaDevolver200` usa `@WithMockUser(username = "...", roles = "USUARIO")` (no ADMIN) a propósito, para que si algún día se rompe el orden de las reglas de `SecurityConfig` de nuevo, este test lo detecte inmediatamente. Suite completa cerró en 92 tests, 0 failures, 0 errors.
+- Verificado en tres niveles antes de dar el módulo por cerrado: tests automatizados (92/92) → Swagger local con un usuario `USUARIO` real → Swagger de producción (Render) con otro usuario real, ambos devolviendo 200 con los datos correctos.
+
+**Bug real / hallazgo de infraestructura, no de código: un contenedor Docker propio compitiendo por el puerto 8080.** Al reiniciar el backend local para que tomara el endpoint nuevo, el puerto 8080 seguía "ocupado" incluso después de matar el proceso Java de IntelliJ con `taskkill`. La causa no era otro `java.exe` colgado (como el bug ya documentado antes) sino un contenedor Docker separado, `aerolinea-backend` (una imagen dockerizada de la propia API, de una prueba de días atrás), mapeado a `0.0.0.0:8080->8080/tcp` y corriendo en paralelo. Como el contenedor tiene el puerto tomado a nivel de Docker (`docker-proxy`), ningún `taskkill` sobre un proceso Java local lo libera. Diagnóstico real: `docker ps` y mirar la columna `PORTS` de cada contenedor, no asumir que el conflicto siempre es un proceso suelto de Windows. Solución puntual: `docker stop aerolinea-backend`, dejando corriendo solo `aerolinea-mysql` (necesaria) y `aerolinea-phpmyadmin` (en el 8081, sin conflicto). Lección: cuando el puerto 8080 "no se libera" a pesar de matar el proceso esperado, revisar también `docker ps` — puede haber más de una cosa escuchando ahí, y no todas son procesos de Windows.
+
+**Frontend (escrito por mí, como el resto del rediseño):** se agregó `obtenerMiPerfil()` en `src/api/usuarios.js` (`GET /api/usuarios/me`) y se actualizó `PerfilPage.jsx` para pedir el perfil real al montar la página y mostrar el `nombre` como título principal (con el email debajo, más chico) en vez de mostrar el email como título — con fallback silencioso al email si la petición fallara, para que la página nunca se rompa por esto.
+
+---
+
+## Deploy del frontend rediseñado a Vercel
+
+El proyecto de Vercel ya existía (conectado desde el primer deploy, antes del rediseño) — solo hizo falta pushear los cambios nuevos para que se redesplegara solo (auto-deploy en cada push a la rama conectada).
+
+- **URL de producción vs. URL de preview de Vercel.** Cada deploy de Vercel genera dos URLs distintas: una de **producción**, fija y corta (ej. `https://aero-pass-frontend.vercel.app`, sin cambiar nunca entre deploys), y una de **preview**, única por deploy, con un hash en el medio (ej. `https://aero-pass-frontend-1jtaiez8b-pablo-8cd0.vercel.app`). Entrar por la URL de preview equivocada hizo aparecer un error de CORS que en realidad no era un bug: el backend nunca tuvo (ni necesitaba tener) esa URL de preview en su whitelist, porque cambia en cada deploy — no tendría sentido perseguirla. La URL correcta para usar/compartir siempre es la de producción, que además ya estaba en la whitelist de CORS del backend desde el deploy original (antes del rediseño), por eso funcionó sin tocar nada del backend.
+- **Verificación completa en producción**: login, Perfil (con nombre real vía `/me`), Dashboard admin con estadísticas reales, CRUD de Vuelos, y el toggle de modo claro/oscuro — todo probado directo contra la URL de producción, con datos reales del backend en Render + Aiven.
+
+---
+
+## Preparando el proyecto para mostrarlo a terceros: usuario de demo + README
+
+Con el deploy verificado (puntos 12 y 13 ya cerrados), el último paso antes de actualizar el CV fue dejar el proyecto listo para que cualquiera pueda entrar a probarlo sin depender de que vos estés presente ni tengas que explicar nada por chat.
+
+- **Usuario de demo con rol ADMIN, promovido desde el propio panel, no por SQL.** En vez de repetir el procedimiento de bootstrap manual (`UPDATE usuarios SET rol = 'ADMIN' ...` directo en Aiven), se usó el flujo que el propio sistema ya ofrece: registrar el usuario de demo normal (rol `USUARIO` por defecto) y promoverlo desde `Panel admin → Usuarios → Hacer admin`, ya logueado con una cuenta admin existente. Más simple, y además es una forma más de confirmar que esa funcionalidad del panel funciona de punta a punta en producción.
+- **README.md en los dos repos**, pensados para que un reclutador o entrevistador técnico entienda el proyecto en la primera pantalla sin tener que clonar nada: qué es, link a la demo en vivo, credenciales de un usuario de prueba (rol ADMIN) para ver el panel completo, lista de funcionalidades, stack técnico, cómo correrlo en local, y cómo está desplegado (Aiven + Render + Vercel). El del frontend lo armé directo (como el resto del rediseño); el del backend te pasé el contenido para que lo agregaras vos a tu repo, mismo criterio que con el resto del código de ese proyecto.
+- **Aviso del "cold start" de Render en el propio README**: la capa gratuita duerme el contenedor tras 15 minutos sin tráfico, y el primer request después de eso tarda entre 30 y 50 segundos en responder. Documentarlo explícitamente evita que alguien evaluando el proyecto piense que está roto cuando en realidad solo se está despertando.
+- **Contraseña de un usuario de demo en texto plano dentro de un README público**: normalmente sería una mala práctica de seguridad, pero en este caso puntual es intencional y aceptable — es una cuenta armada específicamente para que cualquiera la use libremente, sin datos reales ni sensibles detrás.
+- **CV actualizado en paralelo a este cierre**: se armaron dos versiones (español para Argentina, inglés para el exterior), formato ATS-friendly (una sola columna, sin fotos ni íconos decorativos, texto real seleccionable), con la sección de AeroPass ampliada para reflejar todo lo construido desde el rediseño (seguridad JWT, tests, Docker, deploy multi-proveedor) y el trabajo de frontend descripto honestamente como "dirigido e integrado con asistencia de IA" — decisión tomada a propósito para no sobre-representar habilidades de React en una entrevista técnica.
+
+---
+
 ## Próximos temas pendientes (roadmap)
 
 1. ~~Entidad `Avion` (relación `@ManyToOne` desde `Vuelo`)~~ ✅
@@ -398,6 +436,7 @@ A diferencia del backend (siempre escrito por vos), esta parte la construí yo d
 9. ~~Deploy (Aiven MySQL + Render backend + Vercel frontend)~~ ✅
 10. ~~Completar backend con endpoints faltantes para el panel de administración~~ ✅
 11. ~~Rediseño completo del frontend (Tailwind CSS, panel ADMIN completo, landing page, perfil de usuario, dashboard con estadísticas, modo oscuro)~~ ✅
-12. Ajustes de backend pendientes tras el rediseño del frontend (ej. `GET /api/usuarios/me` para que el Perfil muestre el nombre real) — próxima sesión
-13. Deploy del frontend rediseñado (Vercel) y verificación contra producción
-14. Repaso final y buenas prácticas
+12. ~~`GET /api/usuarios/me` para que el Perfil muestre el nombre real (backend + tests + frontend), verificado en local y producción~~ ✅
+13. ~~Deploy del frontend rediseñado (Vercel) y verificación contra producción~~ ✅
+14. ~~Usuario de demo (rol ADMIN) + README en los dos repos, para que cualquiera pueda probar el proyecto sin depender de vos~~ ✅
+15. Repaso final y buenas prácticas
