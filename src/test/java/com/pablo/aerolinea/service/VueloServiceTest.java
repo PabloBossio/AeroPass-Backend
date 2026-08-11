@@ -13,9 +13,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -208,5 +213,31 @@ public class VueloServiceTest {
         assertThrows(RecursoNoEncontradoException.class,() -> vueloService.eliminarVuelo(99L));
 
         verify(vueloRepository, never()).delete(any());
+    }
+
+    @Test
+    void listarTodos_sinFiltros_deberiaDevolverUnaPaginaDeVuelos() {
+        Pageable pageable = PageRequest.of(0, 10);
+        Page<Vuelo> paginaEsperada = new PageImpl<>(List.of(vueloValido()), pageable, 1);
+        when(vueloRepository.buscarConFiltros(null, null, null, pageable))
+                .thenReturn(paginaEsperada);
+
+        Page<Vuelo> resultado = vueloService.listarTodos(null, null, null, pageable);
+
+        assertEquals(1, resultado.getTotalElements());
+        assertEquals(1, resultado.getContent().size());
+    }
+
+    @Test
+    void listarTodos_conFiltros_deberiaPasarlosAlRepository() {
+        Pageable pageable = PageRequest.of(0, 10);
+        Page<Vuelo> paginaEsperada = new PageImpl<>(List.of(vueloValido()), pageable, 1);
+        when(vueloRepository.buscarConFiltros("Cordoba", "Mendoza", EstadoVuelo.PROGRAMADO, pageable))
+                .thenReturn(paginaEsperada);
+
+        Page<Vuelo> resultado = vueloService.listarTodos("Cordoba", "Mendoza", EstadoVuelo.PROGRAMADO, pageable);
+
+        assertEquals(1, resultado.getTotalElements());
+        verify(vueloRepository).buscarConFiltros("Cordoba", "Mendoza", EstadoVuelo.PROGRAMADO, pageable);
     }
 }

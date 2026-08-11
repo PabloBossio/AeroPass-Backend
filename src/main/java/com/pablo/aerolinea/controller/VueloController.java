@@ -1,8 +1,11 @@
 package com.pablo.aerolinea.controller;
 
+import com.pablo.aerolinea.dto.PageResponseDTO;
 import com.pablo.aerolinea.dto.VueloRequestDto;
 import com.pablo.aerolinea.dto.VueloResponseDto;
+import com.pablo.aerolinea.mapper.PageMapper;
 import com.pablo.aerolinea.mapper.VueloMapper;
+import com.pablo.aerolinea.model.EstadoVuelo;
 import com.pablo.aerolinea.model.Vuelo;
 import com.pablo.aerolinea.service.VueloService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -10,9 +13,13 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.data.domain.Page;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.data.domain.Pageable;
+
 
 import java.util.List;
 
@@ -62,10 +69,15 @@ public class VueloController {
     })
 
     @GetMapping
-    public List<VueloResponseDto> listar() {
-        return vueloService.listarTodos().stream()
-                .map(VueloMapper::toResponseDto)
-                .toList();
+    public ResponseEntity<PageResponseDTO<VueloResponseDto>> listarVuelos(
+            @RequestParam(required = false) String origen,
+            @RequestParam(required = false) String destino,
+            @RequestParam(required = false) EstadoVuelo estado,
+            @PageableDefault(size = 10, sort = "fechaSalida")Pageable pageable) {
+        Page<Vuelo> pagina = vueloService.listarTodos(origen, destino, estado, pageable);
+        Page<VueloResponseDto> paginaDTO = pagina.map(VueloMapper::toResponseDto);
+        return ResponseEntity.ok(PageMapper.tPageResponseDTO(paginaDTO));
+
     }
 
     @Operation(summary = "Buscar vuelo por id", description = "Devuelve un vuelo puntual por id.")

@@ -8,6 +8,8 @@ import com.pablo.aerolinea.model.Vuelo;
 import com.pablo.aerolinea.repository.AvionRepository;
 import com.pablo.aerolinea.repository.ReservaRepository;
 import com.pablo.aerolinea.repository.VueloRepository;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -27,8 +29,8 @@ public class VueloService {
         this.reservaRepository = reservaRepository;
     }
 
-    public List<Vuelo> listarTodos() {
-        return vueloRepository.findAll();
+    public Page<Vuelo> listarTodos(String origen, String destino, EstadoVuelo estado, Pageable pageable) {
+        return vueloRepository.buscarConFiltros(origen, destino, estado, pageable);
     }
 
     public Optional<Vuelo> buscarPorId(Long id) {

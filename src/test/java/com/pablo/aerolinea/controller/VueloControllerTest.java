@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.domain.*;
 import org.springframework.http.MediaType;
 import org.springframework.security.test.context.support.WithAnonymousUser;
 import org.springframework.security.test.context.support.WithMockUser;
@@ -21,15 +22,15 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import tools.jackson.databind.json.JsonMapper;
 
+
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.*;
 
+import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -153,12 +154,35 @@ public class VueloControllerTest {
 
     @Test
     @WithAnonymousUser
-    void listar_deberiaDevolverListaVuelos() throws Exception {
-        when(vueloService.listarTodos()).thenReturn(List.of(vueloCreado()));
+    void listarVuelos_deberiaDevolver200ConPaginaDeVuelos() throws Exception {
+        Pageable pageable = PageRequest.of(0, 10, Sort.by("fechaSalida"));
+        Page<Vuelo> pagina = new PageImpl<>(List.of(vueloCreado()), pageable, 1);
+        when(vueloService.listarTodos(isNull(), isNull(), isNull(), any(Pageable.class)))
+                .thenReturn(pagina);
 
         mockMvc.perform(get("/api/vuelos"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].origen").value("Buenos Aires"));
+                .andExpect(jsonPath("$.contenido").isArray())
+                .andExpect(jsonPath("$.contenido.length()").value(1))
+                .andExpect(jsonPath("$.totalElementos").value(1));
+    }
+
+    @Test
+    @WithAnonymousUser
+    void listarVuelos_conFiltros_deberiaPasarlosAlService() throws Exception {
+        Pageable pageable = PageRequest.of(0, 10, Sort.by("fechaSalida"));
+        Page<Vuelo> pagina = new PageImpl<>(List.of(vueloCreado()), pageable, 1);
+        when(vueloService.listarTodos(eq("Cordoba"), eq("Mendoza"), eq(EstadoVuelo.PROGRAMADO), any(Pageable.class)))
+                .thenReturn(pagina);
+
+        mockMvc.perform(get("/api/vuelos")
+                        .param("origen", "Cordoba")
+                        .param("destino", "Mendoza")
+                        .param("estado", "PROGRAMADO"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.contenido.length()").value(1));
+
+        verify(vueloService).listarTodos(eq("Cordoba"), eq("Mendoza"), eq(EstadoVuelo.PROGRAMADO), any(Pageable.class));
     }
 
     @Test

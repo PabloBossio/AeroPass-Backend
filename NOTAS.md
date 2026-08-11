@@ -423,6 +423,67 @@ Con el deploy verificado (puntos 12 y 13 ya cerrados), el último paso antes de 
 
 ---
 
+## Repaso final: fortalezas y áreas a reforzar
+
+Antes de sumar features nuevas, hicimos un repaso activo (preguntas y respuestas, no solo relectura pasiva) de los conceptos centrales de todo el proyecto — arquitectura en capas y DTOs, testing (unit vs. controller), transacciones/concurrencia en reservas, manejo centralizado de excepciones, seguridad con JWT, y Docker/deploy.
+
+**Resultado por bloque:**
+- DTOs y arquitectura en capas: sólido. Buena identificación de filtración de datos y de la necesidad de formas distintas de un mismo recurso; se sumó como refuerzo el control sobre qué puede escribir el cliente (un DTO de request angosto es una restricción "gratis") y el desacople entre el modelo interno y el contrato público de la API.
+- Testing (unit vs. controller): sólido, con un matiz importante reforzado — no es que "un método puede fallar y romper el sistema", es que cada tipo de test cubre una capa que el otro literalmente no puede ver (un unit test nunca pasa por Spring Security ni serializa JSON; un test de controller no repite la lógica de negocio, confirma HTTP/seguridad real).
+- Concurrencia y bloqueo pesimista (reservas): sólido, explicado correctamente sin ayuda.
+- Manejo de excepciones (`@RestControllerAdvice`): sólido una vez explicado — el punto clave es evitar `try/catch` repetido y garantizar un formato de error consistente en toda la API sin poder "olvidarse" de un caso nuevo.
+- **Seguridad / JWT: el bloque más difícil, como era esperable.** Costó separar qué pregunta puntual se estaba respondiendo (tendencia a mezclar conceptos relacionados — duración del token, firma asimétrica, CSRF — en una sola respuesta en vez de contestar la pregunta exacta que se hizo; buena habilidad a entrenar de cara a entrevistas reales). Temas cubiertos en profundidad: el problema de revocación de JWT (no hay estado del lado del servidor, por eso tokens de corta duración + refresh token es el patrón estándar), la relación directa entre dónde se guarda el token (`localStorage` vs. cookie `httpOnly`) y si hace falta CSRF o no (son decisiones acopladas, no independientes), HS256 (simétrico, un solo backend) vs. RS256 (asimétrico, útil cuando quien emite el token y quien lo verifica son servicios distintos), y un gap real identificado en el proyecto actual: no hay rate limiting en `/api/auth/login`, dejando la puerta abierta a fuerza bruta de contraseñas.
+- Docker y deploy (multi-stage build, networking de Docker Compose por nombre de servicio, `${PORT:8080}` para Render): sólido, sin correcciones — las tres respuestas fueron correctas y completas.
+
+**Conclusión**: la seguridad es el área a reforzar con más profundidad, y quedó anotado como plan explícito (no para ahora) armar un segundo proyecto más adelante que vuelva a tocar JWT/autenticación desde cero, ya con el contexto de esta primera implementación — la seguridad es un tema que recién termina de fijarse en una segunda vuelta.
+
+---
+
+## Nuevas features (1): paginación y filtrado server-side en `GET /api/vuelos`
+
+Primera de las seis features nuevas del roadmap. Alcance acordado de antemano en tres pasos: paginación básica primero (probada en Swagger), recién después filtrado, y por último la integración en el frontend — cada paso probado antes de pasar al siguiente, mismo método de siempre.
+
+**Backend (escrito por vos, como siempre):**
+- `VueloRepository.findAll(Pageable)` ya viene gratis por extender `JpaRepository` (que a su vez extiende `PagingAndSortingRepository`) — no hizo falta declarar nada para la paginación básica.
+- **Nunca exponer `Page<T>` de Spring directamente en la respuesta de la API** — mismo principio que "nunca exponer la entidad JPA": se envuelve en un DTO propio. Se creó `PageResponseDTO<T>` (genérico: `contenido`, `paginaActual`, `tamanoPagina`, `totalElementos`, `totalPaginas`, `esUltima`) más un `PageMapper.toPageResponseDTO(Page<T>)` estático, mismo patrón Mapper ya usado en todo el proyecto.
+- `Page<T>.map(Function)` transforma el contenido (`Page<Vuelo>` → `Page<VueloResponseDto>`) preservando toda la metadata de paginación — no hace falta reconstruir el `Page` a mano.
+- `@PageableDefault(size = 10, sort = "fechaSalida")` en el parámetro del controller define los valores por defecto cuando el cliente no manda `page`/`size`/`sort` — Spring resuelve el `Pageable` solo a partir de los query params, sin parseo manual.
+- **Filtrado**: se evaluaron dos enfoques — JPA Specifications (más escalable, pero introduce la Criteria API, una herramienta nueva) vs. una query condicional con `@Query` y parámetros opcionales (`(:origen IS NULL OR v.origen = :origen) AND ...`). Para 3 filtros fijos (origen/destino/estado) se eligió la segunda: resuelve el caso real sin sumar una API nueva a mitad de la feature. Specifications queda anotado como concepto a conocer si el filtrado crece mucho más adelante. No hizo falta `countQuery` aparte: al ser una consulta simple sin joins, Spring Data JPA la deriva sola para la paginación.
+- Los tres filtros llegan como `@RequestParam(required = false)` sueltos en el controller (no un DTO de filtro aparte, por ser solo 3 campos) — con `null` cuando no se mandan, cae en la rama `IS NULL` de la query y devuelve todo sin filtrar, igual que antes de esta feature.
+- Suite completa: 95/95 tests (93 previos + 2 nuevos para el filtrado, cubriendo con y sin filtros en service y controller).
+
+**Bug real, tercera aparición del mismo bug-family de "autocompletado de IntelliJ elige la clase equivocada por nombre repetido":**
+- Primera vez en esta feature: `java.awt.print.Pageable` (AWT, nada que ver) en vez de `org.springframework.data.domain.Pageable`.
+- Segunda vez, en el test del controller: `org.springdoc.core.converters.models.Pageable` (el modelo interno de Springdoc para generar el schema de Swagger) en vez del de Spring Data — mismo síntoma, otra librería. El popup de autocompletado de IntelliJ mostró hasta 4 clases candidatas con el mismo nombre simple `Pageable` (sumando además `Pageable in DataWebProperties`, una clase de configuración de Spring Boot con nombre parecido pero no relacionada); la única correcta para este uso es siempre la de `org.springframework.data.domain`. Lección ya anotada varias veces en este archivo, reforzada una vez más: mirar siempre el paquete completo antes de aceptar una sugerencia de autocompletado.
+
+**Bug real (no de código, de la propia UI de Swagger): serialización rota del parámetro `sort` en el editor JSON.** Al editar el objeto `pageable` vía el panel "Edit Value" de Swagger UI (que arma el `Pageable` completo como un bloque JSON), el campo `sort` (un array, porque `Pageable` admite ordenar por más de una propiedad a la vez) se mandó en la URL final como el string literal `["fechaSalida"]`, corchetes y comillas incluidos, en vez de convertirlo al formato de query string correcto. Síntoma: `InvalidDataAccessApiUsageException: Sort expression '["fechaSalida"]: ASC' must only contain property references...` — Spring Data JPA intentando ordenar por una "propiedad" que literalmente incluía corchetes. No era un bug del código: se confirmó pasando la misma request por `curl` con `sort=fechaSalida` en texto plano (sin corchetes), que respondió 200 correctamente. Lección: para probar parámetros tipo array de `Pageable` en Swagger, mejor usar los campos individuales si la UI los expone así, o testear por `curl`/navegador directo en vez de confiar en el editor JSON de "Edit Value".
+
+**Verificación manual en Swagger, 5 casos antes de dar el backend por cerrado**: sin filtros, un filtro solo, dos combinados, los tres juntos, y el caso límite (una combinación que no matchea ningún vuelo real) — devolvió `contenido: []`, `totalElementos: 0`, `totalPaginas: 0`, `esUltima: true`, sin romperse.
+
+**Criterio para decidir qué otras entidades vale la pena paginar (no solo "se puede", sino "tiene sentido").** Surgió como pregunta genuina durante la feature: ¿por qué paginar `Vuelo` y no `Avion` también? La regla aplicada: paginar cuando la colección **crece sin límite con el uso normal del sistema** y el endpoint la devuelve **toda de una** (ej. `Vuelo`, que acumula histórico indefinidamente). No tiene sentido cuando la colección es chica y básicamente estática (`Avion`, la flota física de la aerolínea — no crece al ritmo de los vuelos). Candidatas identificadas para el mismo tratamiento más adelante, no planificadas todavía: `Usuario` y `Reserva` (ambas crecen con el uso real del sistema, igual que `Vuelo`).
+
+**Trade-off real encontrado al pensar el impacto en el resto del sistema: paginar rompe el conteo agregado del panel admin.** Tanto `DashboardPage.jsx` (estadísticas: totales, ocupación promedio, ingresos) como `VuelosAdminPage.jsx` (la tabla completa de gestión) dependían de que `listarVuelos()` devolviera **todos** los vuelos de una. Solución pragmática acordada explícitamente como no-ideal: pedir una página grande (`{ size: 1000 }`) desde esas dos vistas en vez de sumarles paginación también. La solución "correcta" (un endpoint de agregación server-side aparte, que calcule los totales sin traer todos los registros) queda documentada acá como pendiente, no implementada — se prioriza avanzar con el resto del roadmap antes de perfeccionar este punto.
+
+**Frontend (escrito por mí, como el resto del proyecto):**
+- `listarVuelos()` en `src/api/vuelos.js` pasó de no recibir argumentos a `{ page, size, sort, origen, destino, estado }` (todos opcionales, con defaults) — axios omite solo los parámetros en `undefined`, así que no filtrar es simplemente no pasar esos campos.
+- Se dio de baja `buscarVuelosPorRuta()` (pegaba contra `GET /api/vuelos/buscar`, un endpoint separado): quedó redundante una vez que `GET /api/vuelos` mismo soporta filtrar por origen/destino (y ahora también estado). El endpoint viejo del backend no hace falta borrarlo si sigue existiendo — solo quedó sin ningún consumidor del lado del frontend.
+- `VuelosPage.jsx` (vista pública) sumó filtro por estado (dropdown con los 5 valores del enum, reutilizando las mismas etiquetas ya definidas en `Badge.jsx`), botón "Limpiar filtros", contador de resultados, y controles de paginación (Anterior/Siguiente + "Página X de Y", visibles solo si hay más de una página).
+- `DashboardPage.jsx` y `VuelosAdminPage.jsx`: mismo fix pragmático del lado del backend, adaptado al frontend — piden `{ size: 1000 }` y leen `.contenido` en vez de la respuesta directa.
+- Verificado de punta a punta con datos reales: se armó un admin en la base local (mismas credenciales que el de producción, para no gestionar dos sets distintos — registrado normal y promovido a mano vía phpMyAdmin, con el re-login obligatorio después para que el JWT refleje el rol nuevo) y se confirmó visualmente tanto el Dashboard como el listado de Vuelos del panel admin mostrando los datos correctos, más los filtros nuevos funcionando en la vista pública.
+- Build de producción (`npm run build`) verificado sin errores antes de entregar el código.
+
+**Detalle menor de infraestructura, mismo tipo de troubleshooting ya documentado antes con Docker**: al querer entrar a phpMyAdmin local se probó primero `localhost/phpmyadmin`, que dio `ERR_CONNECTION_REFUSED` — la URL real dependía del puerto mapeado en `docker-compose.yml` para ese contenedor (`8081`, visible en la columna `PORTS` de `docker ps`, no el 80 por defecto), y el contenedor oficial de phpMyAdmin sirve todo desde la raíz, no bajo una ruta `/phpmyadmin`. Mismo método de siempre: `docker ps` para confirmar puerto real en vez de asumir uno.
+
+---
+
+## Ideas para más adelante (explícitamente no planificar todavía)
+
+- **Un segundo proyecto que incluya microservicios.** Anotado a pedido explícito, para después de terminar las features nuevas de AeroPass (ver roadmap) — la idea es que sirva como oportunidad de reforzar seguridad/JWT en un contexto nuevo, más un primer acercamiento real a arquitectura distribuida (comunicación entre servicios, service discovery, posiblemente un API Gateway). No se define alcance ni tecnología todavía a propósito — es una nota para el futuro, no una tarea activa.
+- **Paginar `Usuario` y `Reserva`, con el mismo criterio aplicado a `Vuelo`.** Surgió al cerrar la feature de paginación/filtrado: ambas colecciones crecen con el uso normal del sistema (a diferencia de `Avion`, que es una flota chica y estática), así que son candidatas reales al mismo tratamiento — listado paginado en el panel admin de Usuarios y de Reservas. No planificada todavía, solo anotada.
+- **Endpoint de agregación server-side para las estadísticas del Dashboard admin.** La solución "correcta" al trade-off que rompió `DashboardPage.jsx`/`VuelosAdminPage.jsx` al paginar `Vuelo` — hoy resuelto de forma pragmática pidiendo `{ size: 1000 }` en vez de traer todo sin paginar. Quedaría un endpoint que calcule los totales/agregados del lado del servidor sin necesidad de traer todos los registros al cliente.
+
+---
+
 ## Próximos temas pendientes (roadmap)
 
 1. ~~Entidad `Avion` (relación `@ManyToOne` desde `Vuelo`)~~ ✅
@@ -439,4 +500,12 @@ Con el deploy verificado (puntos 12 y 13 ya cerrados), el último paso antes de 
 12. ~~`GET /api/usuarios/me` para que el Perfil muestre el nombre real (backend + tests + frontend), verificado en local y producción~~ ✅
 13. ~~Deploy del frontend rediseñado (Vercel) y verificación contra producción~~ ✅
 14. ~~Usuario de demo (rol ADMIN) + README en los dos repos, para que cualquiera pueda probar el proyecto sin depender de vos~~ ✅
-15. Repaso final y buenas prácticas
+15. ~~Repaso final y buenas prácticas~~ ✅
+16. Nuevas features para sumar al CV:
+    - ~~Paginación/filtrado server-side en vuelos (backend + frontend, verificado en Swagger y en el navegador con datos reales)~~ ✅
+    - Spring Boot Actuator
+    - CI/CD vía GitHub Actions
+    - Pagos sandbox (Stripe/MercadoPago)
+    - Caché con Redis
+    - Notificaciones por email
+17. (Más adelante, no planificado todavía) Segundo proyecto con microservicios, enfocado en reforzar seguridad/JWT y dar un primer paso en arquitectura distribuida.
