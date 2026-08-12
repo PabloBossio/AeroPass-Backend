@@ -43,3 +43,11 @@ jobs:
           SPRING_DATASOURCE_URL: jdbc:mysql://localhost:3306/aerolinea_test
           SPRING_DATASOURCE_USERNAME: root
           SPRING_DATASOURCE_PASSWORD: root
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Disparar deploy en Render
+        run: curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
