@@ -432,7 +432,7 @@ Antes de sumar features nuevas, hicimos un repaso activo (preguntas y respuestas
 - Testing (unit vs. controller): sólido, con un matiz importante reforzado — no es que "un método puede fallar y romper el sistema", es que cada tipo de test cubre una capa que el otro literalmente no puede ver (un unit test nunca pasa por Spring Security ni serializa JSON; un test de controller no repite la lógica de negocio, confirma HTTP/seguridad real).
 - Concurrencia y bloqueo pesimista (reservas): sólido, explicado correctamente sin ayuda.
 - Manejo de excepciones (`@RestControllerAdvice`): sólido una vez explicado — el punto clave es evitar `try/catch` repetido y garantizar un formato de error consistente en toda la API sin poder "olvidarse" de un caso nuevo.
-- **Seguridad / JWT: el bloque más difícil, como era esperable.** Costó separar qué pregunta puntual se estaba respondiendo (tendencia a mezclar conceptos relacionados — duración del token, firma asimétrica, CSRF — en una sola respuesta en vez de contestar la pregunta exacta que se hizo; buena habilidad a entrenar de cara a entrevistas reales). Temas cubiertos en profundidad: el problema de revocación de JWT (no hay estado del lado del servidor, por eso tokens de corta duración + refresh token es el patrón estándar), la relación directa entre dónde se guarda el token (`localStorage` vs. cookie `httpOnly`) y si hace falta CSRF o no (son decisiones acopladas, no independientes), HS256 (simétrico, un solo backend) vs. RS256 (asimétrico, útil cuando quien emite el token y quien lo verifica son servicios distintos), y un gap real identificado en el proyecto actual: no hay rate limiting en `/api/auth/login`, dejando la puerta abierta a fuerza bruta de contraseñas.
+- **Seguridad / JWT: el bloque más difícil, como era esperable.** Costó separar qué pregunta puntual se estaba respondiendo (tendencia a mezclar conceptos relacionados — duración del token, firma asimétrica, CSRF — en una sola respuesta en vez de contestar la pregunta exacta que se hizo; buena habilidad a entrenar de cara a entrevistas reales). Temas cubiertos en profundidad: el problema de revocación de JWT (no hay estado del lado del servidor, por eso tokens de corta duración + refresh token es el patrón estándar), la relación directa entre dónde se guarda el token (`localStorage` vs. cookie `httpOnly`) y si hace falta CSRF o no (son decisiones acopladas, no independientes), HS256/HS384 (simétrico, un solo backend — este proyecto usa HS384, corregido más abajo tras revisar un token real) vs. RS256 (asimétrico, útil cuando quien emite el token y quien lo verifica son servicios distintos), y un gap real identificado en el proyecto actual: no hay rate limiting en `/api/auth/login`, dejando la puerta abierta a fuerza bruta de contraseñas.
 - Docker y deploy (multi-stage build, networking de Docker Compose por nombre de servicio, `${PORT:8080}` para Render): sólido, sin correcciones — las tres respuestas fueron correctas y completas.
 
 **Conclusión**: la seguridad es el área a reforzar con más profundidad, y quedó anotado como plan explícito (no para ahora) armar un segundo proyecto más adelante que vuelva a tocar JWT/autenticación desde cero, ya con el contexto de esta primera implementación — la seguridad es un tema que recién termina de fijarse en una segunda vuelta.
@@ -476,6 +476,114 @@ Primera de las seis features nuevas del roadmap. Alcance acordado de antemano en
 
 ---
 
+## Nuevas features (2): Spring Boot Actuator (observabilidad)
+
+Segunda de las seis features del roadmap — la más chica y rápida, elegida a propósito para tomar impulso antes de las más grandes.
+
+**Concepto**: Actuator expone automáticamente información operacional de la app vía HTTP (¿está viva?, ¿qué versión es?, métricas de JVM/HTTP) — el tipo de endpoint que en un trabajo real consulta una herramienta de monitoreo o el propio panel del proveedor de hosting, no una persona a mano.
+
+**Corrección importante sobre algo que te dije mal al arrancar este módulo**: afirmé que Actuator tenía una capa de seguridad separada e independiente de `SecurityConfig`. **Es falso** — se comprobó en el momento, con `/actuator/health` e `/actuator/info` devolviendo 403 apenas se agregó la dependencia, sin haber tocado `SecurityConfig` todavía. La razón real: como `spring-security` ya está en el classpath del proyecto, **absolutamente todos** los endpoints (los tuyos y los que trae cualquier librería, Actuator incluido) pasan por tu cadena de filtros — nada queda "afuera" de Spring Security por default. Como no había ninguna regla explícita para `/actuator/**`, cayó en la regla de cierre `anyRequest().authenticated()` ya existente. Mismo principio ya documentado desde el primer día en este archivo ("apenas agregás `spring-boot-starter-security`, todos los endpoints piden autenticación por defecto"), reforzado acá con un caso nuevo.
+
+**Backend (escrito por vos, como siempre):**
+- Dependencia `spring-boot-starter-actuator`. Por defecto, solo `/actuator/health` queda expuesto por HTTP — el resto están "activos" pero no accesibles hasta habilitarlos a propósito (medida de seguridad: agregar la dependencia sola no debería filtrar información sensible sin que lo decidas). Se habilitaron `health`, `info`, `metrics` vía `management.endpoints.web.exposure.include=health,info,metrics`.
+- `management.endpoint.health.show-details=when-authorized` + `management.endpoint.health.roles=ADMIN`: un request sin autenticar a `/health` solo ve `{"status":"UP"}`; autenticado con rol `ADMIN` ve el detalle completo (`components`, con el estado real de cada pieza).
+- **`DataSourceHealthIndicator` es automático**: sin escribir ninguna línea de código, Actuator detectó el `DataSource` configurado y probó la conexión real a MySQL, reportando `db: UP` con el motor detectado — buen ejemplo de la autoconfiguración de Spring Boot funcionando "gratis" cuando ya tenés las piezas correctas en el proyecto.
+- **Reglas nuevas en `SecurityConfig`**, agregadas antes de la regla de cierre (mismo principio de siempre — específico antes que genérico, ya que si `hasRole("ADMIN")` sobre `/actuator/**` quedara antes que la regla de `/actuator/health`+`/actuator/info`, la más amplia ganaría primero):
+```java
+.requestMatchers("/actuator/health", "/actuator/info").permitAll()
+.requestMatchers("/actuator/**").hasRole("ADMIN")
+```
+- **Bug real: `/actuator/info` devolvía `{}` vacío pese a tener `info.app.*` en `application.properties`.** El `EnvironmentInfoContributor` (el que lee justamente esas propiedades) viene **desactivado por defecto** desde hace varias versiones de Spring Boot — hay que habilitarlo a mano con `management.info.env.enabled=true`. Sin esa línea, las propiedades `info.*` quedan escritas pero nadie las lee para armar la respuesta.
+- **Testing distinto al resto del proyecto, a propósito**: acá no sirve `@WebMvcTest` (su escaneo angosto no levanta `SecurityConfig` ni la autoconfiguración de Actuator sin trabajo extra, como ya está documentado más arriba) — corresponde `@SpringBootTest` completo + `@AutoConfigureMockMvc`, que levanta el contexto real (con la base real) para probar la seguridad de punta a punta. 4 tests nuevos (`health` público sin detalle, `metrics` sin auth → 403, `metrics`/`health` con `ADMIN` → 200 y detalle completo). Suite completa: 99/99.
+- **Corrección menor de precisión, encontrada de pasada revisando un JWT real**: el `alg` del header del token es `HS384`, no `HS256` como quedó anotado en la sección de seguridad/JWT de este archivo — mismo algoritmo simétrico, versión más fuerte; se corrige acá para que quede exacto.
+
+**Verificado en cuatro escenarios antes de cerrar el módulo**: local sin auth (`health`/`info` públicos, `metrics` → 403), local con token `ADMIN` (`metrics` → 200, `health` con detalle completo), producción con los mismos dos casos, y la suite automatizada.
+
+**Falso alarma en producción, buena lección de troubleshooting reforzada**: el login en producción (`POST /api/auth/login`, ruta `permitAll()`) daba 403 — que en un login debería ser imposible salvo que algo esté mal configurado, ya que ni siquiera debería llegar a evaluar autorización. Se descartó paso a paso: los logs de Render confirmaban el deploy `Live` sin errores; el `SecurityConfig` pegado coincidía exactamente con lo esperado; los headers de la respuesta (los mismos que agrega `HeaderWriterFilter` de Spring Security en cada respuesta) confirmaban que la request sí llegaba a la app, no era un bloqueo de infraestructura de Render/Cloudflare. La causa real, mucho más simple: la request de Postman había quedado con un **Bearer Token viejo cargado en la pestaña Authorization** (heredado de haber probado `/actuator/metrics` justo antes en la misma sesión de Postman) — nada que ver con el backend. Mismo método ya aplicado una vez con el bug de Aiven: **aislar la herramienta de prueba** (en ese caso, un cliente de mysql aparte; acá, probar el mismo request directo desde Swagger UI) para confirmar que el problema estaba del lado del cliente de prueba, no del servidor.
+
+**Producción — Health Check Path de Render**: se configuró `/actuator/health` como Health Check Path en el dashboard del servicio (Settings), reemplazando la ausencia de configuración explícita. Ahora Render usa ese endpoint (liviano, sin autenticación) para decidir si el contenedor está realmente sano, no solo si "arrancó" — el mismo propósito con el que se diseñó ese endpoint para quedar público.
+
+---
+
+## Nuevas features (3): CI/CD con GitHub Actions
+
+Tercera feature del roadmap, hecha con poco tiempo disponible (media hora), así que el módulo se resolvió en pasos chicos y muy incrementales — cada error se corrigió antes de seguir, en vez de acumular cambios sin probar.
+
+**Concepto**: un workflow de GitHub Actions corre automáticamente en cada push/PR a `main` — primero corre los tests (**CI**), y si pasan, dispara el deploy a Render (**CD**), en vez de que Render despliegue sin importar si algo está roto.
+
+**Archivo**: `.github/workflows/ci.yml` (dos jobs, `test` y `deploy`, el segundo con `needs: test`). El job `test` levanta un MySQL descartable como *service container* — necesario porque, a diferencia de los tests de servicio/controller (mockeados, sin base), la suite tiene algunos `@SpringBootTest` completos (el de contexto, `ActuatorSecurityTest`) que sí necesitan una base real para levantar el `ApplicationContext`.
+
+**Tres bugs reales en el camino, todos de infraestructura/configuración, no de código Java — buen recordatorio de que CI/CD tiene su propia categoría de errores, distinta a la de programar:**
+- **`.git/workflows/` en vez de `.github/workflows/`.** Nombres casi idénticos a simple vista, pero `.git` es la base de datos interna de Git (nada de lo que se ponga ahí se trata como parte normal del repo); `.github` es una carpeta convencional donde GitHub busca configuración del repositorio, entre otras cosas los workflows. GitHub Actions no encuentra nada si el archivo queda en el lugar equivocado.
+- **Push rechazado: `refusing to allow a Personal Access Token to create or update workflow ... without workflow scope`.** GitHub trata los archivos de `.github/workflows/` como sensibles (pueden ejecutar código arbitrario en su infraestructura) y exige que el token usado para autenticar el push tenga el scope `workflow` habilitado explícitamente, además del `repo` normal — hubo que regenerar el token con ese scope y volver a autenticar (Windows: borrar la credencial vieja en el Administrador de credenciales para forzar el re-login).
+- **`./mvnw: Permission denied` (exit code 126) en el runner de GitHub Actions.** El Maven Wrapper se commiteó originalmente desde Windows, que no maneja el bit de ejecución de Unix de la misma forma — así que el archivo llegó al repo sin ese permiso marcado. En Windows nunca se nota (`mvnw.cmd`/asociación de archivos lo tapa), pero el runner de Actions es Ubuntu y sí lo exige. Solución: un paso `run: chmod +x mvnw` antes de correr los tests en el workflow (no hace falta arreglar el bit en el repo en sí, alcanza con corregirlo en cada corrida del CI).
+
+**Diseño de la parte de CD**: se decidió no depender del auto-deploy nativo de Render (que ignora si los tests pasan o no) — en cambio, se desactivó ("Auto-Deploy: Off") y se agregó un job `deploy` en el mismo workflow que dispara un **Deploy Hook** de Render (una URL única de disparo) vía `curl -X POST`, condicionado con `needs: test` (no corre si `test` falla) y `if: github.ref == 'refs/heads/main' && github.event_name == 'push'` (para que un PR no dispare un deploy). La URL del hook se guardó como **GitHub Actions secret** (`RENDER_DEPLOY_HOOK_URL`), nunca pegada directo en el yaml — cualquiera con esa URL puede disparar un deploy del servicio, así que es un dato sensible como cualquier credencial.
+
+**Verificación, parcial por el tiempo disponible**: los dos jobs (`test`, `deploy`) corrieron en verde en GitHub Actions, y los logs de la aplicación en Render confirmaron "servicio en vivo" — quedó pendiente solo confirmar que el badge de estado del deploy en el dashboard de Render se puso en "Live" (parecía ir con un pequeño delay respecto al log real de la app, normal, no una falla). A confirmar/cerrar del todo la próxima vez que se retome este tema.
+
+---
+
+## Nuevas features (4): Caché con Redis en `GET /api/vuelos/{id}`
+
+Cuarta feature del roadmap. Elegida por sobre pagos/notificaciones para este momento del proyecto porque tocaba un concepto nuevo (caching) sin depender de servicios externos de terceros (a diferencia de Stripe/MercadoPago o un proveedor de email).
+
+**Concepto**: cachear la respuesta de un endpoint de lectura frecuente para no pegarle a la base de datos en cada request — Redis guarda el resultado ya calculado en memoria, con una expiración (TTL), y Spring se encarga de leer/escribir ese caché de forma transparente vía anotaciones.
+
+**Backend (escrito por vos, como siempre):**
+- Dependencias nuevas: `spring-boot-starter-data-redis` (cliente Redis para Spring) + `spring-boot-starter-cache` (abstracción de caché de Spring, independiente del proveedor).
+- `docker-compose.yml`: nuevo servicio `redis` (imagen `redis:7-alpine`, puerto `6379`), sin volumen — a diferencia de MySQL, perder el caché al reiniciar el contenedor no es un problema real (es información derivable, no la fuente de verdad).
+- `application.properties`: `spring.data.redis.host=localhost` / `spring.data.redis.port=6379`.
+- **`@EnableCaching` + `CacheConfig`** (clase `@Configuration` nueva): define un bean `RedisCacheConfiguration` con TTL de 10 minutos (`entryTtl(Duration.ofMinutes(10))`), serialización JSON en vez del serializador Java por defecto (más liviano y legible directamente en `redis-cli`), y `disableCachingNullValues()` — a propósito, para que una búsqueda por un id inexistente **nunca** quede cacheada como "no existe" para siempre; cada intento contra un id que no existe sigue golpeando la base real.
+- **Decisión de diseño clave: cachear el método que devuelve DTO (`buscarPorIdCacheado`), nunca el que devuelve la entidad (`buscarPorId`).** `buscarPorId` (que devuelve `Optional<Vuelo>`) lo siguen usando internamente `editarVuelo`/`eliminarVuelo` para mutar el vuelo — cachear ahí arriesgaría trabajar sobre una entidad vieja/detached de una edición anterior. El método nuevo, `buscarPorIdCacheado`, llama a `buscarPorId` y mapea a `VueloResponseDto` (inmutable, ya desacoplado de Hibernate) — ese es el que se cachea:
+```java
+@Cacheable(cacheNames = "vuelo", key = "#id")
+public VueloResponseDto buscarPorIdCacheado(Long id) {
+    return buscarPorId(id)
+            .map(VueloMapper::toResponseDto)
+            .orElse(null);
+}
+```
+- **`@CacheEvict(cacheNames = "vuelo", key = "#id")`** agregado sobre `editar` y `eliminar` en el controller — invalida la entrada cacheada de ese vuelo puntual apenas se edita o borra, para que la próxima lectura traiga datos frescos en vez de servir la versión vieja.
+- `VueloController.buscarPorId` pasó de llamar al service (`Optional<Vuelo>`) a llamar directo a `buscarPorIdCacheado` (`VueloResponseDto` o `null`), sin pasar por `Optional` en el controller — coherente con que el mapeo ya lo hace el service ahora.
+
+**Concepto nuevo, importante para el futuro: el "self-invocation problem" de Spring AOP.** `@Cacheable`/`@Transactional`/etc. funcionan mediante un *proxy* que Spring genera alrededor del bean real — cuando un método llama a otro método **de la misma clase** vía `this.algo()` (implícito, sin que se note en el código), esa llamada no pasa por el proxy, así que la anotación se ignora en silencio, sin ningún error. Por eso `buscarPorIdCacheado` se puso en `VueloService` (invocado desde `VueloController`, un bean distinto — llamada real cruzada a través del proxy) y no como un método privado dentro del propio controller. Mismo tipo de "falla silenciosa por mecanismo de Spring", ya documentado antes en este archivo con las anotaciones de mapeo HTTP faltantes — la diferencia es que acá la causa no es una anotación faltante, sino *dónde* vive el método.
+
+**Bug real de knowledge-cutoff (mismo patrón ya visto con Spring Boot 4/Jackson 3): `GenericJackson2JsonRedisSerializer` deprecado/removido en esta versión del proyecto.** La sugerencia inicial (basada en versiones anteriores de Spring Data Redis) no compilaba — IntelliJ marcaba la clase como deprecada/inexistente. El reemplazo real, confirmado vía autocompletado del IDE: `GenericJacksonJsonRedisSerializer`, que ahora pide explícitamente un `ObjectMapper` inyectado por constructor (ya no arma uno con `new` por dentro solo). Y ese `ObjectMapper` tiene que ser el de **Jackson 3** (`tools.jackson.databind.ObjectMapper`, no el viejo `com.fasterxml.jackson.databind.ObjectMapper`), consistente con el resto de la migración de Jackson 3 ya documentada en la sección de Spring Boot 4 de este archivo. Config final:
+```java
+@Configuration
+@EnableCaching
+public class CacheConfig {
+    private final ObjectMapper objectMapper;
+
+    public CacheConfig(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
+
+    @Bean
+    public RedisCacheConfiguration cacheConfiguration() {
+        return RedisCacheConfiguration.defaultCacheConfig()
+                .entryTtl(Duration.ofMinutes(10))
+                .serializeValuesWith(RedisSerializationContext.SerializationPair
+                        .fromSerializer(new GenericJacksonJsonRedisSerializer(objectMapper)))
+                .disableCachingNullValues();
+    }
+}
+```
+
+**Bug real de test, mismo patrón que "el mock no está stubbeado devuelve `null`/default":** al cambiar `buscarPorId` del controller para llamar a `buscarPorIdCacheado` en vez de `buscarPorId` del service, los dos tests existentes de ese endpoint seguían mockeando el método viejo (`vueloService.buscarPorId(...)`) — como el controller ya no lo llama, el mock de `buscarPorIdCacheado` quedaba sin stubbear y Mockito le devolvía `null` por default, dando 404 en vez de 200. Se corrigieron los dos tests para mockear `buscarPorIdCacheado` directo, devolviendo un `VueloResponseDto`/`null` en vez de un `Optional<Vuelo>`. Confirmado: 99/99.
+
+**Verificación manual con evidencia real, en tres pasos:**
+1. `GET /api/vuelos/2` en Swagger → 200 con el DTO completo.
+2. `docker exec -it aerolinea-redis redis-cli` → `KEYS *` mostró `vuelo::2`, y `GET "vuelo::2"` devolvió el JSON completo ya serializado (con Jackson 3 vía la config de arriba) — confirmando que la escritura en caché funcionó y con el formato esperado. (Nota al margen: `redis-cli` mostró "Cancún" con los bytes UTF-8 escapados tipo `\xc3\xba` en vez de la tilde legible — comportamiento normal de cómo `redis-cli` imprime bytes crudos, no indica ningún problema de codificación real.)
+3. **`PUT /api/vuelos/2`** (cambiando `precio` a `700.00`) para probar `@CacheEvict` — primer intento dio **403 Forbidden**, con el `curl` reproducido mostrando que faltaba el header `Authorization` por completo. Causa: sesión de Swagger sin loguearse como ADMIN (el botón "Authorize" con un token fresco de `/api/auth/login`), no un bug del código nuevo — coherente con que `SecurityConfig` exige `hasRole("ADMIN")` para `PUT /api/vuelos/**`. Una vez autenticado correctamente, el `PUT` funcionó, y:
+   - `KEYS *` inmediatamente después mostró `(empty array)` — confirmando que `@CacheEvict` borró la entrada apenas se editó el vuelo.
+   - Un `GET /api/vuelos/2` posterior repobló el caché, y `GET "vuelo::2"` en `redis-cli` mostró el JSON **ya con `precio: 700.00`** — confirmando que lo que se recachea es el dato fresco, no el viejo.
+
+Con esto, el ciclo completo (`@Cacheable` puebla → `@CacheEvict` invalida → siguiente lectura repuebla con datos frescos) quedó verificado con evidencia real de Redis, no solo asumido por leer el código.
+
+---
+
 ## Ideas para más adelante (explícitamente no planificar todavía)
 
 - **Un segundo proyecto que incluya microservicios.** Anotado a pedido explícito, para después de terminar las features nuevas de AeroPass (ver roadmap) — la idea es que sirva como oportunidad de reforzar seguridad/JWT en un contexto nuevo, más un primer acercamiento real a arquitectura distribuida (comunicación entre servicios, service discovery, posiblemente un API Gateway). No se define alcance ni tecnología todavía a propósito — es una nota para el futuro, no una tarea activa.
@@ -503,9 +611,9 @@ Primera de las seis features nuevas del roadmap. Alcance acordado de antemano en
 15. ~~Repaso final y buenas prácticas~~ ✅
 16. Nuevas features para sumar al CV:
     - ~~Paginación/filtrado server-side en vuelos (backend + frontend, verificado en Swagger y en el navegador con datos reales)~~ ✅
-    - Spring Boot Actuator
-    - CI/CD vía GitHub Actions
+    - ~~Spring Boot Actuator (health/info/metrics con seguridad por rol, verificado en local y producción, health check de Render configurado)~~ ✅
+    - ~~CI/CD vía GitHub Actions (tests automáticos + deploy a Render condicionado a que pasen)~~ ✅ (verificación del badge de Render en el dashboard pendiente de confirmar la próxima vez, sin bloquear el cierre)
     - Pagos sandbox (Stripe/MercadoPago)
-    - Caché con Redis
+    - ~~Caché con Redis (`@Cacheable`/`@CacheEvict` en `GET /api/vuelos/{id}`, TTL 10 min, verificado con `redis-cli`: caché se puebla, se invalida en la edición, y se repuebla con datos frescos)~~ ✅
     - Notificaciones por email
 17. (Más adelante, no planificado todavía) Segundo proyecto con microservicios, enfocado en reforzar seguridad/JWT y dar un primer paso en arquitectura distribuida.

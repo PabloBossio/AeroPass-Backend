@@ -4,6 +4,7 @@ import com.pablo.aerolinea.config.SecurityConfig;
 import com.pablo.aerolinea.dto.VueloRequestDto;
 import com.pablo.aerolinea.exception.RecursoNoEncontradoException;
 import com.pablo.aerolinea.exception.ReglaDeNegocioException;
+import com.pablo.aerolinea.mapper.VueloMapper;
 import com.pablo.aerolinea.model.Avion;
 import com.pablo.aerolinea.model.EstadoVuelo;
 import com.pablo.aerolinea.model.Vuelo;
@@ -188,7 +189,7 @@ public class VueloControllerTest {
     @Test
     @WithAnonymousUser
     void buscarPorId_conIdExistente_deberiaDevolver200() throws Exception {
-        when(vueloService.buscarPorId(1L)).thenReturn(Optional.of(vueloCreado()));
+        when(vueloService.buscarPorIdCacheado(1L)).thenReturn(VueloMapper.toResponseDto(vueloCreado()));
 
         mockMvc.perform(get("/api/vuelos/1"))
                 .andExpect(status().isOk())
@@ -198,7 +199,7 @@ public class VueloControllerTest {
     @Test
     @WithAnonymousUser
     void buscarPorId_conIdInexistente_deberiaDevolver404() throws Exception {
-        when(vueloService.buscarPorId(99L)).thenReturn(Optional.empty());
+        when(vueloService.buscarPorIdCacheado(99L)).thenReturn(null);
 
         mockMvc.perform(get("/api/vuelos/99"))
                 .andExpect(status().isNotFound());

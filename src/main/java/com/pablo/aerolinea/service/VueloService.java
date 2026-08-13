@@ -1,13 +1,16 @@
 package com.pablo.aerolinea.service;
 
+import com.pablo.aerolinea.dto.VueloResponseDto;
 import com.pablo.aerolinea.exception.RecursoNoEncontradoException;
 import com.pablo.aerolinea.exception.ReglaDeNegocioException;
+import com.pablo.aerolinea.mapper.VueloMapper;
 import com.pablo.aerolinea.model.Avion;
 import com.pablo.aerolinea.model.EstadoVuelo;
 import com.pablo.aerolinea.model.Vuelo;
 import com.pablo.aerolinea.repository.AvionRepository;
 import com.pablo.aerolinea.repository.ReservaRepository;
 import com.pablo.aerolinea.repository.VueloRepository;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -96,5 +99,12 @@ public class VueloService {
         if (vuelo.getPrecio().signum() <= 0) {
             throw new ReglaDeNegocioException("El precio debe ser mayor a 0.");
         }
+    }
+
+    @Cacheable(cacheNames = "vuelo", key = "#id")
+    public VueloResponseDto buscarPorIdCacheado(Long id) {
+        return buscarPorId(id)
+                .map(VueloMapper::toResponseDto)
+                .orElse(null);
     }
 }

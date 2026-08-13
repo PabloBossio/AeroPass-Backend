@@ -42,5 +42,11 @@ services:
       mysql:
         condition: service_healthy
 
+  redis:
+    image: redis:7-alpine
+    container_name: aerolinea-redis
+    ports:
+      - "6379:6379"
+
 volumes:
   mysql_data:

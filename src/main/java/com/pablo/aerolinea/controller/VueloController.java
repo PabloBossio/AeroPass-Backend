@@ -13,6 +13,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.data.domain.Page;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
@@ -56,6 +57,7 @@ public class VueloController {
             @ApiResponse(responseCode = "404", description = "No existe un vuelo o avion con ese id")
     })
 
+    @CacheEvict(cacheNames = "vuelo", key = "#id")
     @PutMapping("/{id}")
     public ResponseEntity<VueloResponseDto> editar(@PathVariable Long id, @Valid @RequestBody VueloRequestDto request) {
         Vuelo actualizado = vueloService.editarVuelo(id, VueloMapper.toEntity(request), request.getAvionId());
@@ -88,10 +90,8 @@ public class VueloController {
 
     @GetMapping("/{id}")
     public ResponseEntity<VueloResponseDto> buscarPorId(@PathVariable Long id) {
-        return vueloService.buscarPorId(id)
-                .map(VueloMapper::toResponseDto)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+        VueloResponseDto dto = vueloService.buscarPorIdCacheado(id);
+        return dto != null ? ResponseEntity.ok(dto) : ResponseEntity.notFound().build();
     }
 
     @Operation(summary = "Buscar vuelos por ruta", description = "devuelve los vuelos que coincidan con el origen y destino indicados")
@@ -113,6 +113,7 @@ public class VueloController {
             @ApiResponse(responseCode = "404", description = "No existe un vuelo con ese id")
     })
 
+    @CacheEvict(cacheNames = "vuelo", key = "#id")
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> eliminar(@PathVariable Long id) {
         vueloService.eliminarVuelo(id);
