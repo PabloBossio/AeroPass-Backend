@@ -33,6 +33,9 @@ public class ReservaServiceTest {
     @Mock
     private UsuarioRepository usuarioRepository;
 
+    @Mock
+    private EmailService emailService;
+
     @InjectMocks
     private ReservaService reservaService;
 
@@ -76,6 +79,9 @@ public class ReservaServiceTest {
         assertEquals(9, vuelo.getAsientosDisponibles());
         verify(vueloRepository, times(1)).save(vuelo);
         verify(reservaRepository, times(1)).save(any(Reserva.class));
+        verify(emailService, times(1)).enviarConfirmacionReserva(
+                usuario.getNombre(), usuario.getEmail(), vuelo.getOrigen(), vuelo.getDestino(),
+                vuelo.getFechaSalida(), resultado.getPrecioPagado());
     }
 
     @Test
@@ -134,6 +140,7 @@ public class ReservaServiceTest {
 
         Reserva reserva = Reserva.builder()
                 .id(5L)
+                .usuario(usuarioValido())
                 .vuelo(vuelo)
                 .estado(EstadoReserva.CONFIRMADA)
                 .build();
@@ -146,6 +153,9 @@ public class ReservaServiceTest {
         assertEquals(EstadoReserva.CANCELADA, resultado.getEstado());
         assertEquals(10, vuelo.getAsientosDisponibles());
         verify(vueloRepository, times(1)).save(vuelo);
+        verify(emailService, times(1)).enviarCancelacionReserva(
+                reserva.getUsuario().getNombre(), reserva.getUsuario().getEmail(), vuelo.getOrigen(), vuelo.getDestino(),
+                vuelo.getFechaSalida());
     }
 
     @Test

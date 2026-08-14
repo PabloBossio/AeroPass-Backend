@@ -19,11 +19,13 @@ public class ReservaService {
     private final ReservaRepository reservaRepository;
     private final VueloRepository vueloRepository;
     private final UsuarioRepository usuarioRepository;
+    private final EmailService emailService;
 
-    public ReservaService(ReservaRepository reservaRepository, VueloRepository vueloRepository, UsuarioRepository usuarioRepository) {
+    public ReservaService(ReservaRepository reservaRepository, VueloRepository vueloRepository, UsuarioRepository usuarioRepository, EmailService emailService) {
         this.reservaRepository = reservaRepository;
         this.vueloRepository = vueloRepository;
         this.usuarioRepository = usuarioRepository;
+        this.emailService = emailService;
     }
 
     public List<Reserva> listarTodas() {
@@ -65,7 +67,10 @@ public class ReservaService {
                 .estado(EstadoReserva.CONFIRMADA)
                 .build();
 
-        return reservaRepository.save(reserva);
+        Reserva reservaGuardada = reservaRepository.save(reserva);
+        emailService.enviarConfirmacionReserva(usuario.getNombre(), usuario.getEmail(), vuelo.getOrigen(),
+                vuelo.getDestino(), vuelo.getFechaSalida(), reservaGuardada.getPrecioPagado());
+        return reservaGuardada;
     }
 
     public Reserva cancelarReserva(Long reservaId) {
@@ -81,7 +86,11 @@ public class ReservaService {
         vueloRepository.save(vuelo);
 
         reserva.setEstado(EstadoReserva.CANCELADA);
-        return reservaRepository.save(reserva);
+
+        Reserva reservaGuardada = reservaRepository.save(reserva);
+        emailService.enviarCancelacionReserva(reserva.getUsuario().getNombre(), reserva.getUsuario().getEmail(),
+                vuelo.getOrigen(), vuelo.getDestino(), vuelo.getFechaSalida());
+        return reservaGuardada;
     }
 
 
