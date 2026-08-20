@@ -64,12 +64,10 @@ public class ReservaService {
                 .vuelo(vuelo)
                 .fechaReserva(LocalDateTime.now())
                 .precioPagado(vuelo.getPrecio())
-                .estado(EstadoReserva.CONFIRMADA)
+                .estado(EstadoReserva.PENDIENTE_PAGO)
                 .build();
 
         Reserva reservaGuardada = reservaRepository.save(reserva);
-        emailService.enviarConfirmacionReserva(usuario.getNombre(), usuario.getEmail(), vuelo.getOrigen(),
-                vuelo.getDestino(), vuelo.getFechaSalida(), reservaGuardada.getPrecioPagado());
         return reservaGuardada;
     }
 

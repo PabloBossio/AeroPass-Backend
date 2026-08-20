@@ -7,6 +7,7 @@ import com.pablo.aerolinea.exception.ReglaDeNegocioException;
 import com.pablo.aerolinea.model.*;
 import com.pablo.aerolinea.security.JwtUtil;
 import com.pablo.aerolinea.security.UsuarioDetailsService;
+import com.pablo.aerolinea.service.PagoService;
 import com.pablo.aerolinea.service.ReservaService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -47,6 +48,9 @@ public class ReservaControllerTest {
 
     @MockitoBean
     private UsuarioDetailsService usuarioDetailsService;
+
+    @MockitoBean
+    private PagoService pagoService;
 
     private Avion avionValido() {
         return Avion.builder()

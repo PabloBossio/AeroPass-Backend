@@ -74,14 +74,11 @@ public class ReservaServiceTest {
         Reserva resultado = reservaService.crearReserva(1L, 2L);
 
         assertNotNull(resultado);
-        assertEquals(EstadoReserva.CONFIRMADA, resultado.getEstado());
+        assertEquals(EstadoReserva.PENDIENTE_PAGO, resultado.getEstado());
         assertEquals(new BigDecimal("500.00"), resultado.getPrecioPagado());
         assertEquals(9, vuelo.getAsientosDisponibles());
         verify(vueloRepository, times(1)).save(vuelo);
         verify(reservaRepository, times(1)).save(any(Reserva.class));
-        verify(emailService, times(1)).enviarConfirmacionReserva(
-                usuario.getNombre(), usuario.getEmail(), vuelo.getOrigen(), vuelo.getDestino(),
-                vuelo.getFechaSalida(), resultado.getPrecioPagado());
     }
 
     @Test

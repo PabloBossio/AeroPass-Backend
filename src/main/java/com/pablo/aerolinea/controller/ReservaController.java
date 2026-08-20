@@ -4,17 +4,20 @@ import com.pablo.aerolinea.dto.ReservaRequestDTO;
 import com.pablo.aerolinea.dto.ReservaResponseDTO;
 import com.pablo.aerolinea.mapper.ReservarMapper;
 import com.pablo.aerolinea.model.Reserva;
+import com.pablo.aerolinea.service.PagoService;
 import com.pablo.aerolinea.service.ReservaService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @Tag(name = "Reservas", description = "Creacion, cancelacion y consulta de reservas - requiere estar autenticado")
 @RestController
@@ -22,9 +25,11 @@ import java.util.List;
 public class ReservaController {
 
     private final ReservaService reservaService;
+    private final PagoService pagoService;
 
-    public ReservaController(ReservaService reservaService) {
+    public ReservaController(ReservaService reservaService, PagoService pagoService) {
         this.reservaService = reservaService;
+        this.pagoService = pagoService;
     }
 
     @Operation(summary = "Crear reserva", description = "registra una nueva reserva")
@@ -94,6 +99,12 @@ public class ReservaController {
                 .map(ReservarMapper::toResponseDTO)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
+    }
+
+    @PostMapping("/{id}/pago")
+    public ResponseEntity<Map<String, String>> crearPago(@PathVariable Long id) {
+        String url = pagoService.crearSesionDePago(id);
+        return ResponseEntity.ok(Map.of("url", url));
     }
 
 }
