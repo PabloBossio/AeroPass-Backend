@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.domain.*;
 import org.springframework.http.MediaType;
 import org.springframework.security.test.context.support.WithAnonymousUser;
 import org.springframework.security.test.context.support.WithMockUser;
@@ -132,11 +133,14 @@ public class UsuarioControllerTest {
     @Test
     @WithMockUser(roles = "ADMIN")
     void listar_conRolAdmin_deberiaDevolverListaUsuarios() throws Exception {
-        when(usuarioService.listarTodos()).thenReturn(List.of(usuarioCreado()));
+        Pageable pageable = PageRequest.of(0,10, Sort.by("nombre"));
+        Page<Usuario> pagina = new PageImpl<>(List.of(usuarioCreado()), pageable, 1);
+        when(usuarioService.listarTodos(any(Pageable.class))).thenReturn(pagina);
 
         mockMvc.perform(get("/api/usuarios"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].email").value("juan.perez@gmail.com"));
+                .andExpect(jsonPath("$.contenido").isArray())
+                .andExpect(jsonPath("$.contenido[0].email").value("juan.perez@gmail.com"));
     }
 
     @Test

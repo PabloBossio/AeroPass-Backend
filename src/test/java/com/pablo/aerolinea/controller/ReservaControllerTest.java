@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.domain.*;
 import org.springframework.http.MediaType;
 import org.springframework.security.test.context.support.WithAnonymousUser;
 import org.springframework.security.test.context.support.WithMockUser;
@@ -25,6 +26,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -210,11 +212,13 @@ public class ReservaControllerTest {
     @Test
     @WithMockUser(roles = "ADMIN")
     void listarTodas_conRolAdmin_deberiaDevolverListaReservas() throws Exception {
-        when(reservaService.listarTodas()).thenReturn(List.of(reservaCreada()));
+        Pageable pageable = PageRequest.of(0,10, Sort.by("fechaReserva"));
+        Page<Reserva> pagina = new PageImpl<>(List.of(reservaCreada()), pageable, 1);
+        when(reservaService.listarTodas(any(Pageable.class))).thenReturn(pagina);
 
         mockMvc.perform(get("/api/reservas"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].estado").value("CONFIRMADA"));
+                .andExpect(jsonPath("$.contenido[0].estado").value("CONFIRMADA"));
     }
 
     @Test

@@ -5,6 +5,8 @@ import com.pablo.aerolinea.exception.ReglaDeNegocioException;
 import com.pablo.aerolinea.model.Rol;
 import com.pablo.aerolinea.model.Usuario;
 import com.pablo.aerolinea.repository.UsuarioRepository;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -22,8 +24,8 @@ public class UsuarioService {
         this.passwordEncoder = passwordEncoder;
     }
 
-    public List<Usuario> listarTodos(){
-        return usuarioRepository.findAll();
+    public Page<Usuario> listarTodos(Pageable pageable) {
+        return usuarioRepository.findAll(pageable);
     }
 
     public Optional<Usuario> buscarPorId(Long id) {

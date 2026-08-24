@@ -1,7 +1,9 @@
 package com.pablo.aerolinea.controller;
 
+import com.pablo.aerolinea.dto.PageResponseDTO;
 import com.pablo.aerolinea.dto.ReservaRequestDTO;
 import com.pablo.aerolinea.dto.ReservaResponseDTO;
+import com.pablo.aerolinea.mapper.PageMapper;
 import com.pablo.aerolinea.mapper.ReservarMapper;
 import com.pablo.aerolinea.model.Reserva;
 import com.pablo.aerolinea.service.PagoService;
@@ -12,6 +14,9 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -67,11 +72,13 @@ public class ReservaController {
     })
 
     @GetMapping
-    public List<ReservaResponseDTO> listarTodas() {
-        return reservaService.listarTodas().stream()
-                .map(ReservarMapper::toResponseDTO)
-                .toList();
+    public ResponseEntity<PageResponseDTO<ReservaResponseDTO>> listarTodas(
+            @PageableDefault(size = 10, sort = "fechaReserva") Pageable pageable) {
+        Page<Reserva> pagina = reservaService.listarTodas(pageable);
+        Page<ReservaResponseDTO> paginaDTO = pagina.map(ReservarMapper::toResponseDTO);
+        return ResponseEntity.ok(PageMapper.tPageResponseDTO(paginaDTO));
     }
+
 
     @Operation(summary = "Buscar reservas por usuarios", description = "Busca las reservas realizadas por un usuario puntual")
     @ApiResponses({

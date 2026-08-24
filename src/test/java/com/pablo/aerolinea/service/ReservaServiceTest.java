@@ -11,6 +11,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -185,12 +189,16 @@ public class ReservaServiceTest {
     void listarTodas_deberiaDevolverTodasLasReservas() {
         Reserva reserva1 = Reserva.builder().id(1L).estado(EstadoReserva.CONFIRMADA).build();
         Reserva reserva2 = Reserva.builder().id(2L).estado(EstadoReserva.CANCELADA).build();
+        Pageable pageable = PageRequest.of(0,10);
+        Page<Reserva> pagina = new PageImpl<>(List.of(reserva1, reserva2), pageable, 2);
 
-        when(reservaRepository.findAll()).thenReturn(List.of(reserva1, reserva2));
+        when(reservaRepository.findAll(pageable)).thenReturn(pagina);
 
-        var resultado = reservaService.listarTodas();
+        var resultado = reservaService.listarTodas(pageable);
 
-        assertEquals(2, resultado.size());
-        verify(reservaRepository, times(1)).findAll();
+        assertEquals(2, resultado.getContent().size());
+        verify(reservaRepository, times(1)).findAll(pageable);
+
+
     }
 }

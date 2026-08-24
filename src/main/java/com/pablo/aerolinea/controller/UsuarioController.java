@@ -1,8 +1,10 @@
 package com.pablo.aerolinea.controller;
 
 import com.pablo.aerolinea.dto.CambioRolDTO;
+import com.pablo.aerolinea.dto.PageResponseDTO;
 import com.pablo.aerolinea.dto.UsuarioRequestDTO;
 import com.pablo.aerolinea.dto.UsuarioResponseDTO;
+import com.pablo.aerolinea.mapper.PageMapper;
 import com.pablo.aerolinea.mapper.UsuarioMapper;
 import com.pablo.aerolinea.model.Usuario;
 import com.pablo.aerolinea.service.UsuarioService;
@@ -11,6 +13,9 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -48,10 +53,11 @@ public class UsuarioController {
     })
 
     @GetMapping
-    public List<UsuarioResponseDTO> listar() {
-        return usuarioService.listarTodos().stream()
-                .map(UsuarioMapper::toResponseDTO)
-                .toList();
+    public ResponseEntity<PageResponseDTO<UsuarioResponseDTO>> listar(
+            @PageableDefault(size = 10, sort = "nombre") Pageable pageable) {
+        Page<Usuario> pagina = usuarioService.listarTodos(pageable);
+        Page<UsuarioResponseDTO> paginaDTO = pagina.map(UsuarioMapper::toResponseDTO);
+        return ResponseEntity.ok(PageMapper.tPageResponseDTO(paginaDTO));
     }
 
     @Operation(summary = "Buscar usuario por id", description = "Devuelve un usuario puntual por id.")

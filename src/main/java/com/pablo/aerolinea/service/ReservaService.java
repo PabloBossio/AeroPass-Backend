@@ -7,6 +7,8 @@ import com.pablo.aerolinea.repository.ReservaRepository;
 import com.pablo.aerolinea.repository.UsuarioRepository;
 import com.pablo.aerolinea.repository.VueloRepository;
 import jakarta.transaction.Transactional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -28,8 +30,8 @@ public class ReservaService {
         this.emailService = emailService;
     }
 
-    public List<Reserva> listarTodas() {
-        return reservaRepository.findAll();
+    public Page<Reserva> listarTodas(Pageable pageable) {
+        return reservaRepository.findAll(pageable);
     }
 
     public List<Reserva> listarPorUsuario(Long usuarioId) {
