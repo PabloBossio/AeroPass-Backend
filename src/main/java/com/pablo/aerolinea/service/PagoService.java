@@ -24,14 +24,16 @@ public class PagoService {
     private final ReservaRepository reservaRepository;
     private final PagoRepository pagoRepository;
     private final EmailService emailService;
+    private final ReservaService reservaService;
 
     @Value("${app.frontend.url}")
     private String frontendUrl;
 
-    public PagoService(ReservaRepository reservaRepository, PagoRepository pagoRepository, EmailService emailService) {
+    public PagoService(ReservaRepository reservaRepository, PagoRepository pagoRepository, EmailService emailService, ReservaService reservaService) {
         this.reservaRepository = reservaRepository;
         this.pagoRepository = pagoRepository;
         this.emailService = emailService;
+        this.reservaService = reservaService;
     }
 
     public String crearSesionDePago(Long reservaId) {
@@ -105,6 +107,7 @@ public class PagoService {
         Reserva reserva = pago.getReserva();
         reserva.setEstado(EstadoReserva.CONFIRMADA);
         reservaRepository.save(reserva);
+        reservaService.evitarCacheReserva(reserva.getId());
 
         emailService.enviarConfirmacionReserva(
                 reserva.getUsuario().getNombre(),

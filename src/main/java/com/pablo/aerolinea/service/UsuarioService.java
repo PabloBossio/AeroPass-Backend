@@ -1,10 +1,15 @@
 package com.pablo.aerolinea.service;
 
+import com.pablo.aerolinea.dto.UsuarioRequestDTO;
+import com.pablo.aerolinea.dto.UsuarioResponseDTO;
 import com.pablo.aerolinea.exception.RecursoNoEncontradoException;
 import com.pablo.aerolinea.exception.ReglaDeNegocioException;
+import com.pablo.aerolinea.mapper.UsuarioMapper;
 import com.pablo.aerolinea.model.Rol;
 import com.pablo.aerolinea.model.Usuario;
 import com.pablo.aerolinea.repository.UsuarioRepository;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -41,6 +46,7 @@ public class UsuarioService {
         return usuarioRepository.save(usuario);
     }
 
+    @CacheEvict(cacheNames = "usuario", key = "#id")
     public Usuario actualizarRol(Long id, Rol nuevoRol) {
         Usuario usuario = usuarioRepository.findById(id)
                 .orElseThrow(() -> new RecursoNoEncontradoException("No existe un usuario con ese id: " + id));
@@ -51,5 +57,12 @@ public class UsuarioService {
     public Usuario buscarPorEmail(String email) {
         return usuarioRepository.findByEmail(email)
                 .orElseThrow(() -> new RecursoNoEncontradoException("No existe un usuario con ese email: " + email));
+    }
+
+    @Cacheable(cacheNames = "usuario", key = "#id")
+    public UsuarioResponseDTO buscarPorIdCacheado(Long id) {
+        return buscarPorId(id)
+                .map(UsuarioMapper::toResponseDTO)
+                .orElse(null);
     }
 }

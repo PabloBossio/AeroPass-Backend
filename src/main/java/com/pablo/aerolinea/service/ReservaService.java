@@ -1,12 +1,16 @@
 package com.pablo.aerolinea.service;
 
+import com.pablo.aerolinea.dto.ReservaResponseDTO;
 import com.pablo.aerolinea.exception.RecursoNoEncontradoException;
 import com.pablo.aerolinea.exception.ReglaDeNegocioException;
+import com.pablo.aerolinea.mapper.ReservarMapper;
 import com.pablo.aerolinea.model.*;
 import com.pablo.aerolinea.repository.ReservaRepository;
 import com.pablo.aerolinea.repository.UsuarioRepository;
 import com.pablo.aerolinea.repository.VueloRepository;
 import jakarta.transaction.Transactional;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -73,6 +77,7 @@ public class ReservaService {
         return reservaGuardada;
     }
 
+    @CacheEvict(cacheNames = "reserva", key = "#reservaId")
     public Reserva cancelarReserva(Long reservaId) {
         Reserva reserva = reservaRepository.findById(reservaId)
                 .orElseThrow(() -> new RecursoNoEncontradoException("No existe una reserva con ese id: " + reservaId));
@@ -93,6 +98,13 @@ public class ReservaService {
         return reservaGuardada;
     }
 
+    @Cacheable(cacheNames = "reserva", key = "#id")
+    public ReservaResponseDTO buscarPorIdCacheado(Long id) {
+        return buscarPorId(id)
+                .map(ReservarMapper::toResponseDTO)
+                .orElse(null);
+    }
 
-
+    @CacheEvict(cacheNames = "reserva", key = "#id")
+    public void evitarCacheReserva(Long id){}
 }

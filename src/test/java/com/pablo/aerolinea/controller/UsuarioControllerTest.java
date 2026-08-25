@@ -5,6 +5,7 @@ import com.pablo.aerolinea.dto.CambioRolDTO;
 import com.pablo.aerolinea.dto.UsuarioRequestDTO;
 import com.pablo.aerolinea.exception.RecursoNoEncontradoException;
 import com.pablo.aerolinea.exception.ReglaDeNegocioException;
+import com.pablo.aerolinea.mapper.UsuarioMapper;
 import com.pablo.aerolinea.model.Rol;
 import com.pablo.aerolinea.model.Usuario;
 import com.pablo.aerolinea.security.JwtUtil;
@@ -146,7 +147,7 @@ public class UsuarioControllerTest {
     @Test
     @WithMockUser(roles = "ADMIN")
     void buscarPorId_conIdExistente_deberiaDevolver200() throws Exception {
-        when(usuarioService.buscarPorId(1L)).thenReturn(Optional.of(usuarioCreado()));
+        when(usuarioService.buscarPorIdCacheado(1L)).thenReturn(UsuarioMapper.toResponseDTO(usuarioCreado()));
 
         mockMvc.perform(get("/api/usuarios/1"))
                 .andExpect(status().isOk())
@@ -156,7 +157,7 @@ public class UsuarioControllerTest {
     @Test
     @WithMockUser(roles = "ADMIN")
     void buscarPorId_conIdInexistente_deberiaDevolver404() throws Exception {
-        when(usuarioService.buscarPorId(99L)).thenReturn(Optional.empty());
+        when(usuarioService.buscarPorIdCacheado(99L)).thenReturn(null);
 
         mockMvc.perform(get("/api/usuarios/99"))
                 .andExpect(status().isNotFound());

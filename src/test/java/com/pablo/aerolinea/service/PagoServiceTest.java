@@ -42,6 +42,9 @@ public class PagoServiceTest {
     private PagoRepository pagoRepository;
 
     @Mock
+    private ReservaService reservaService;
+
+    @Mock
     private EmailService emailService;
 
     @InjectMocks
@@ -128,6 +131,7 @@ public class PagoServiceTest {
         verify(emailService, times(1)).enviarConfirmacionReserva(
                 eq("Pablo"), eq("pablo@test.com"
                 ), eq("Mendoza"), eq("Cancun"), any(LocalDateTime.class), eq(new BigDecimal("500.00")));
+        verify(reservaService, times(1)).evitarCacheReserva(1L);
     }
 
 
@@ -196,6 +200,7 @@ public class PagoServiceTest {
         verify(pagoRepository, never()).save(any(Pago.class));
         verify(reservaRepository, never()).save(any(Reserva.class));
         verifyNoInteractions(emailService);
+        verifyNoInteractions(reservaService);
     }
 
 }

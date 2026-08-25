@@ -740,11 +740,53 @@ Feature chica, surgida como ítem anotado al cerrar la paginación/filtrado de `
 
 ---
 
+## Extendiendo el caché con Redis a `Usuario` y `Reserva` ✅
+
+Primer ítem tomado de la lista de "Ideas para más adelante": extender a otras dos entidades el mismo patrón `@Cacheable`/`@CacheEvict` ya probado con `Vuelo` (ver la feature de Redis más arriba). Backend puro, sin cambios de frontend.
+
+**Reutilización directa del patrón existente, sin cambios de configuración.** `CacheConfig` ya define un `RedisCacheConfiguration` default (TTL 10 min, serialización JSON, `disableCachingNullValues()`) que aplica a **cualquier** `cacheNames` nuevo sin configuración adicional — los nombres `"usuario"` y `"reserva"` heredan ese comportamiento automáticamente, no hizo falta tocar `CacheConfig` para nada.
+
+- **`UsuarioService.buscarPorIdCacheado`** (nuevo, análogo a `buscarPorIdCacheado` de `Vuelo`): `@Cacheable(cacheNames = "usuario", key = "#id")`, devuelve el DTO, llama internamente a `buscarPorId` (que sigue devolviendo la entidad, sin cachear, para no arriesgar trabajar con datos viejos en las mutaciones). `UsuarioController.bucarPorId` pasó a llamar a este método nuevo en vez del viejo.
+- **`@CacheEvict(cacheNames = "usuario", key = "#id")`** agregado sobre `actualizarRol` — la única mutación por id que existe hoy sobre `Usuario` (no hay `editar`/`eliminar` genérico todavía).
+- **`ReservaService.buscarPorIdCacheado`**, mismo patrón exacto. `ReservaController.buscarPorId` pasó a llamarlo.
+- **`@CacheEvict(cacheNames = "reserva", key = "#id")`** agregado sobre `cancelarReserva`.
+
+**El caso especial: invalidar el caché de `Reserva` desde el webhook de Stripe.** `PagoService.confirmarPago(Event event)` (el método que procesa el evento `checkout.session.completed` del webhook, ver la feature de Stripe) también cambia el `estado` de una `Reserva` a `CONFIRMADA` — necesitaba la misma invalidación que `cancelarReserva`, pero un `@CacheEvict(key = "#id")` directo sobre `confirmarPago` no era viable: el método recibe un `Event` de Stripe como único parámetro, no un `reservaId` — el id de la reserva se obtiene recién a mitad de la ejecución, vía `pago.getReserva().getId()`, después de deserializar el evento y buscar el `Pago` correspondiente.
+
+Solución: un método nuevo, chico y dedicado en `ReservaService`:
+```java
+@CacheEvict(cacheNames = "reserva", key = "#id")
+public void evictarCacheReserva(Long id) {
+    // Cuerpo vacío a propósito: existe solo para que Spring dispare el
+    // @CacheEvict a través del proxy con un id ya conocido, no para hacer
+    // ningún trabajo real.
+}
+```
+`PagoService` pasó a inyectar `ReservaService` por constructor (dependencia nueva) y a llamar `reservaService.evictarCacheReserva(reserva.getId())` justo después de guardar la reserva confirmada (`reservaRepository.save(reserva)`).
+
+**Por qué no alcanzaba con evictar desde dentro del propio `ReservaService`/`PagoService` de cualquier forma.** Volvió a aplicar el "self-invocation problem" ya documentado en la feature de Redis de `Vuelo`: el `@CacheEvict` solo se dispara si la llamada pasa por el proxy de Spring, es decir, si viene de un bean **distinto**. Como `confirmarPago` vive en `PagoService` y necesita evictar el caché de `Reserva`, la solución no podía ser un método privado dentro de `PagoService` ni una llamada `this.algo()` dentro de `ReservaService` — tenía que ser exactamente lo que se hizo: un método público en `ReservaService`, invocado desde `PagoService` (bean distinto), cruzando el proxy real.
+
+**Ajustes de tests, mismo patrón ya visto con `Vuelo` ("el controller ya no llama al método viejo"):**
+- `UsuarioControllerTest.buscarPorId_*` y `ReservaControllerTest.buscarPorId_*`: se corrigieron para mockear `buscarPorIdCacheado` en vez de `buscarPorId`, devolviendo el DTO (o `null`) directo en vez de un `Optional`.
+- `PagoServiceTest`: se agregó `@Mock private ReservaService reservaService;` (dependencia nueva de `PagoService`). En `confirmarPago_PagoPendiente_confirmaReservaYEnviaEmail` se sumó `verify(reservaService, times(1)).evictarCacheReserva(1L)`, confirmando que la eviction se dispara exactamente una vez con el id correcto. En `confirmarPago_pagoYaAprobado_noVuelveAProcesar` se sumó `verifyNoInteractions(reservaService)` — si el pago ya estaba aprobado, el método corta antes y **no** debería tocar el caché para nada. El test de pago no encontrado no necesitó cambios (falla antes de llegar a esa parte del código).
+
+**Verificación manual con evidencia real de Redis, en tres escenarios distintos:**
+1. **`Usuario`**: `GET /api/usuarios/{id}` → `KEYS *` mostró `usuario::{id}` cacheado. `PUT /api/usuarios/{id}/rol` → `KEYS *` inmediatamente después ya no lo mostraba (evicted). Un `GET` posterior repobló el caché con el rol nuevo.
+2. **`Reserva` vía `PUT /cancelar`**: mismo ciclo completo (`GET` puebla → `PUT /cancelar` evict → `GET` repobla con `estado: CANCELADA`), confirmado con `redis-cli`.
+3. **`Reserva` vía webhook de Stripe (el caso especial)**: se reservó un vuelo nuevo, se cacheó con un `GET /api/reservas/{id}` (`estado: PENDIENTE_PAGO`), se completó un pago real de prueba en Stripe Checkout con `stripe listen` corriendo en paralelo (todos los eventos, incluido `checkout.session.completed`, devolvieron `200`), y `KEYS *` confirmó que `reserva::{id}` había desaparecido — evicted por `evictarCacheReserva` desde `PagoService`, sin que nadie llame a `cancelarReserva`/`confirmarPago` manualmente. Un `GET /api/reservas/{id}` posterior devolvió `estado: CONFIRMADA` y `KEYS *` mostró `reserva::{id}` de nuevo, ya con el dato fresco — cerrando el ciclo completo también para el camino menos obvio (invalidación disparada por un webhook externo, no por un endpoint propio).
+
+Con los tres escenarios confirmados con evidencia real de `redis-cli` (no solo lectura de código), y con el flujo de pago real de Stripe de por medio en el tercero, la feature quedó verificada de punta a punta. Suite completa: 108/108.
+
+**Gap conocido, anotado para más adelante, no bloqueante hoy**: `crearReserva`/`cancelarReserva` modifican `vuelo.asientosDisponibles` (para reflejar el asiento ocupado/liberado) pero nunca invalidan la entrada `vuelo::{id}` del caché de `Vuelo` — así que, durante los 10 minutos de TTL, un `GET /api/vuelos/{id}` cacheado podría mostrar un `asientosDisponibles` desactualizado justo después de una reserva o cancelación. No se corrigió en esta feature (alcance acordado: solo `Usuario`/`Reserva`), queda anotado en "Ideas para más adelante".
+
+---
+
 ## Ideas para más adelante (explícitamente no planificar todavía)
 
 - **Un segundo proyecto que incluya microservicios.** Anotado a pedido explícito, para después de terminar las features nuevas de AeroPass (ver roadmap) — la idea es que sirva como oportunidad de reforzar seguridad/JWT en un contexto nuevo, más un primer acercamiento real a arquitectura distribuida (comunicación entre servicios, service discovery, posiblemente un API Gateway). No se define alcance ni tecnología todavía a propósito — es una nota para el futuro, no una tarea activa.
 - **Endpoint de agregación server-side para las estadísticas del Dashboard admin.** La solución "correcta" al trade-off que rompió `DashboardPage.jsx` al paginar `Vuelo`, y después de nuevo con `Usuario`/`Reserva` — hoy resuelto de forma pragmática pidiendo `{ size: 1000 }` en las tres colecciones en vez de traer todo sin paginar. Quedaría un endpoint que calcule los totales/agregados del lado del servidor sin necesidad de traer todos los registros al cliente.
-- **Extender el cacheo con Redis a los demás endpoints de lectura que lo justifiquen.** Por ahora Redis solo cachea `GET /api/vuelos/{id}` (la prueba de concepto del feature). Queda pendiente revisar el resto de la API con el mismo criterio (endpoints de lectura frecuente, con costo real de ir a la base, y con una invalidación clara vía `@CacheEvict` en las mutaciones correspondientes) y decidir cuáles conviene sumar — candidatos a evaluar: `GET /api/vuelos` (la lista paginada/filtrada), `GET /api/aviones` (flota chica y estática, buen candidato porque cambia poco), y cualquier otro que aparezca al revisar. Se trabaja igual que el resto de los temas pendientes de esta lista: recién después de terminar las features nuevas que quedan en el roadmap.
+- **Extender el cacheo con Redis a los demás endpoints de lectura que lo justifiquen.** Ya cachea `GET /api/vuelos/{id}` (prueba de concepto original), y ahora también `GET /api/usuarios/{id}` y `GET /api/reservas/{id}`. Queda pendiente revisar el resto de la API con el mismo criterio (endpoints de lectura frecuente, con costo real de ir a la base, y con una invalidación clara vía `@CacheEvict` en las mutaciones correspondientes) y decidir cuáles conviene sumar — candidatos a evaluar: `GET /api/vuelos` (la lista paginada/filtrada), `GET /api/aviones` (flota chica y estática, buen candidato porque cambia poco), y cualquier otro que aparezca al revisar. Se trabaja igual que el resto de los temas pendientes de esta lista: recién después de terminar las features nuevas que quedan en el roadmap.
+- **`crearReserva`/`cancelarReserva` no invalidan el caché `vuelo::{id}` al modificar `asientosDisponibles`.** Detectado al cerrar la feature de caché de `Usuario`/`Reserva`: durante el TTL de 10 minutos, un `GET /api/vuelos/{id}` cacheado puede mostrar `asientosDisponibles` desactualizado justo después de una reserva o cancelación sobre ese vuelo. Corrección pendiente: sumar `@CacheEvict(cacheNames = "vuelo", key = "#vueloId")` (o equivalente) en esos dos métodos de `ReservaService`.
 - **`ReservaService.cancelarReserva` no tiene `@Transactional`, a diferencia de `crearReserva`.** Notado de pasada al conectar las notificaciones por email — `cancelarReserva` modifica dos entidades (`vuelo.asientosDisponibles` y `reserva.estado`) en dos `save()` separados, igual que `crearReserva`, pero sin la anotación que garantiza que ambas escrituras sean atómicas. Si el segundo `save()` fallara, quedaría un asiento liberado sin que la reserva se haya marcado como cancelada. No es urgente (`update` simples, baja probabilidad de fallo a mitad de camino), pero es una inconsistencia real que vale la pena corregir agregando `@Transactional` a ese método también.
 - **Enviar también un email de notificación cuando un vuelo asociado cambia de estado (demorado/cancelado).** Alcance descartado a propósito al arrancar la feature de notificaciones (se eligió el alcance más chico: solo confirmación/cancelación de reserva) — quedaría pendiente evaluar si vale la pena sumarlo, tocando `VueloService` además de `ReservaService`.
 
@@ -775,4 +817,5 @@ Feature chica, surgida como ítem anotado al cerrar la paginación/filtrado de `
     - ~~Caché con Redis (`@Cacheable`/`@CacheEvict` en `GET /api/vuelos/{id}`, TTL 10 min, `CacheErrorHandler` para degradar con gracia, health check corregido, y Redis real en producción vía Render Key Value — verificado con `redis-cli` en local y en producción)~~ ✅
     - ~~Notificaciones por email (confirmación y cancelación de reserva, vía Mailtrap sandbox, `@Async` con manejo de errores resiliente, verificado con evidencia real en la bandeja de Mailtrap)~~ ✅
     - ~~Paginación server-side en `Usuario` y `Reserva` (backend con el mismo patrón de `Vuelo`, panel admin con paginación real a diferencia del truco usado en `VuelosAdminPage`, Dashboard ajustado, verificado con 108/108 tests y capturas)~~ ✅
+    - ~~Caché con Redis extendido a `Usuario` y `Reserva` (mismo patrón `@Cacheable`/`@CacheEvict` de `Vuelo`, más un caso especial de invalidación disparada desde el webhook de Stripe vía `PagoService`→`ReservaService.evictarCacheReserva`, verificado con `redis-cli` en tres escenarios incluyendo un pago real de Stripe, y 108/108 tests)~~ ✅
 17. (Más adelante, no planificado todavía) Segundo proyecto con microservicios, enfocado en reforzar seguridad/JWT y dar un primer paso en arquitectura distribuida.

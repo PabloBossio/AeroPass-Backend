@@ -102,10 +102,8 @@ public class ReservaController {
 
     @GetMapping("/{id}")
     public ResponseEntity<ReservaResponseDTO> buscarPorId(@PathVariable Long id) {
-        return reservaService.buscarPorId(id)
-                .map(ReservarMapper::toResponseDTO)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+        ReservaResponseDTO dto = reservaService.buscarPorIdCacheado(id);
+        return dto != null ? ResponseEntity.ok(dto) : ResponseEntity.notFound().build();
     }
 
     @PostMapping("/{id}/pago")

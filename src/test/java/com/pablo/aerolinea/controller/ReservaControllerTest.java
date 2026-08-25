@@ -4,6 +4,7 @@ import com.pablo.aerolinea.config.SecurityConfig;
 import com.pablo.aerolinea.dto.ReservaRequestDTO;
 import com.pablo.aerolinea.exception.RecursoNoEncontradoException;
 import com.pablo.aerolinea.exception.ReglaDeNegocioException;
+import com.pablo.aerolinea.mapper.ReservarMapper;
 import com.pablo.aerolinea.model.*;
 import com.pablo.aerolinea.security.JwtUtil;
 import com.pablo.aerolinea.security.UsuarioDetailsService;
@@ -193,7 +194,7 @@ public class ReservaControllerTest {
     @Test
     @WithMockUser(roles = "USUARIO")
     void buscarPorId_conIdExistente_deberiaDevolver200() throws Exception {
-        when(reservaService.buscarPorId(1L)).thenReturn(Optional.of(reservaCreada()));
+        when(reservaService.buscarPorIdCacheado(1L)).thenReturn(ReservarMapper.toResponseDTO(reservaCreada()));
 
         mockMvc.perform(get("/api/reservas/1"))
                 .andExpect(status().isOk())
@@ -203,7 +204,7 @@ public class ReservaControllerTest {
     @Test
     @WithMockUser(roles = "USUARIO")
     void buscarPorId_conIdInexistente_deberiaDevolver404() throws Exception {
-        when(reservaService.buscarPorId(99L)).thenReturn(Optional.empty());
+        when(reservaService.buscarPorIdCacheado(99L)).thenReturn(null);
 
         mockMvc.perform(get("/api/reservas/99"))
                 .andExpect(status().isNotFound());

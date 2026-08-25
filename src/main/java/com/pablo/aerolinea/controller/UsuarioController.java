@@ -69,10 +69,8 @@ public class UsuarioController {
 
     @GetMapping("/{id}")
     public ResponseEntity<UsuarioResponseDTO> bucarPorId(@PathVariable Long id) {
-        return usuarioService.buscarPorId(id)
-                .map(UsuarioMapper::toResponseDTO)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+       UsuarioResponseDTO dto = usuarioService.buscarPorIdCacheado(id);
+       return dto != null ? ResponseEntity.ok(dto) : ResponseEntity.notFound().build();
     }
 
     @Operation(summary = "Cambiar rol de un usuario", description = "Actualiza el rol de un usuario existente.")
