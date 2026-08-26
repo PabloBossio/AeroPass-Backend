@@ -25,12 +25,14 @@ public class ReservaService {
     private final ReservaRepository reservaRepository;
     private final VueloRepository vueloRepository;
     private final UsuarioRepository usuarioRepository;
+    private final VueloService vueloService;
     private final EmailService emailService;
 
-    public ReservaService(ReservaRepository reservaRepository, VueloRepository vueloRepository, UsuarioRepository usuarioRepository, EmailService emailService) {
+    public ReservaService(ReservaRepository reservaRepository, VueloRepository vueloRepository, UsuarioRepository usuarioRepository, VueloService vueloService, EmailService emailService) {
         this.reservaRepository = reservaRepository;
         this.vueloRepository = vueloRepository;
         this.usuarioRepository = usuarioRepository;
+        this.vueloService = vueloService;
         this.emailService = emailService;
     }
 
@@ -64,6 +66,7 @@ public class ReservaService {
 
         vuelo.setAsientosDisponibles(vuelo.getAsientosDisponibles() -1 );
         vueloRepository.save(vuelo);
+        vueloService.evictarCacheVuelo(vuelo.getId());
 
         Reserva reserva = Reserva.builder()
                 .usuario(usuario)
@@ -77,6 +80,7 @@ public class ReservaService {
         return reservaGuardada;
     }
 
+    @Transactional
     @CacheEvict(cacheNames = "reserva", key = "#reservaId")
     public Reserva cancelarReserva(Long reservaId) {
         Reserva reserva = reservaRepository.findById(reservaId)
@@ -89,6 +93,7 @@ public class ReservaService {
         Vuelo vuelo = reserva.getVuelo();
         vuelo.setAsientosDisponibles(vuelo.getAsientosDisponibles() +1);
         vueloRepository.save(vuelo);
+        vueloService.evictarCacheVuelo(vuelo.getId());
 
         reserva.setEstado(EstadoReserva.CANCELADA);
 

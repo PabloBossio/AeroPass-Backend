@@ -35,6 +35,9 @@ public class ReservaServiceTest {
     private VueloRepository vueloRepository;
 
     @Mock
+    private VueloService vueloService;
+
+    @Mock
     private UsuarioRepository usuarioRepository;
 
     @Mock
@@ -82,6 +85,7 @@ public class ReservaServiceTest {
         assertEquals(new BigDecimal("500.00"), resultado.getPrecioPagado());
         assertEquals(9, vuelo.getAsientosDisponibles());
         verify(vueloRepository, times(1)).save(vuelo);
+        verify(vueloService, times(1)).evictarCacheVuelo(vuelo.getId());
         verify(reservaRepository, times(1)).save(any(Reserva.class));
     }
 
@@ -154,6 +158,7 @@ public class ReservaServiceTest {
         assertEquals(EstadoReserva.CANCELADA, resultado.getEstado());
         assertEquals(10, vuelo.getAsientosDisponibles());
         verify(vueloRepository, times(1)).save(vuelo);
+        verify(vueloService, times(1)).evictarCacheVuelo(vuelo.getId());
         verify(emailService, times(1)).enviarCancelacionReserva(
                 reserva.getUsuario().getNombre(), reserva.getUsuario().getEmail(), vuelo.getOrigen(), vuelo.getDestino(),
                 vuelo.getFechaSalida());

@@ -10,6 +10,7 @@ import com.pablo.aerolinea.model.Vuelo;
 import com.pablo.aerolinea.repository.AvionRepository;
 import com.pablo.aerolinea.repository.ReservaRepository;
 import com.pablo.aerolinea.repository.VueloRepository;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -107,4 +108,7 @@ public class VueloService {
                 .map(VueloMapper::toResponseDto)
                 .orElse(null);
     }
+
+    @CacheEvict(cacheNames = "vuelo", key = "#id")
+    public void evictarCacheVuelo(Long id) {}
 }

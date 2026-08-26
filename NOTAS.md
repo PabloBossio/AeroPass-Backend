@@ -777,7 +777,55 @@ public void evictarCacheReserva(Long id) {
 
 Con los tres escenarios confirmados con evidencia real de `redis-cli` (no solo lectura de código), y con el flujo de pago real de Stripe de por medio en el tercero, la feature quedó verificada de punta a punta. Suite completa: 108/108.
 
-**Gap conocido, anotado para más adelante, no bloqueante hoy**: `crearReserva`/`cancelarReserva` modifican `vuelo.asientosDisponibles` (para reflejar el asiento ocupado/liberado) pero nunca invalidan la entrada `vuelo::{id}` del caché de `Vuelo` — así que, durante los 10 minutos de TTL, un `GET /api/vuelos/{id}` cacheado podría mostrar un `asientosDisponibles` desactualizado justo después de una reserva o cancelación. No se corrigió en esta feature (alcance acordado: solo `Usuario`/`Reserva`), queda anotado en "Ideas para más adelante".
+**Gap encontrado y ya corregido (no quedó pendiente): `crearReserva`/`cancelarReserva` no invalidaban el caché de `Vuelo`.** `ReservaService.crearReserva`/`cancelarReserva` modifican `vuelo.asientosDisponibles` (para reflejar el asiento ocupado/liberado) hablando directo con `VueloRepository`, sin pasar nunca por `VueloService` — así que, durante los 10 minutos de TTL, un `GET /api/vuelos/{id}` cacheado podía mostrar un `asientosDisponibles` desactualizado justo después de una reserva o cancelación sobre ese vuelo.
+
+Se corrigió con el mismo patrón ya usado para el caso especial del webhook de Stripe: un método nuevo y dedicado en `VueloService`,
+```java
+@CacheEvict(cacheNames = "vuelo", key = "#id")
+public void evictarCacheVuelo(Long id) {
+    // Cuerpo vacío a propósito, mismo patrón que evictarCacheReserva.
+}
+```
+invocado desde `ReservaService` (que ya tenía a `VueloService` como dependencia inyectada por otro motivo, así que no hizo falta tocar el constructor) justo después de cada `vueloRepository.save(vuelo)`, tanto en `crearReserva` como en `cancelarReserva` — cruzando el proxy de Spring correctamente al venir de un bean distinto, evitando de nuevo el "self-invocation problem".
+
+De paso se corrigió también la inconsistencia ya anotada de `cancelarReserva` sin `@Transactional` (a diferencia de `crearReserva`, que sí la tenía) — mismo motivo que siempre: modifica dos entidades en dos `save()` separados, y sin la anotación un fallo a mitad de camino podía dejar un asiento liberado sin que la reserva quedara marcada como cancelada.
+
+**Verificación manual con `redis-cli`, en los dos caminos**: `GET /api/vuelos/{id}` (puebla `vuelo::{id}`) → `POST /api/reservas` sobre ese vuelo → `KEYS *` confirma que `vuelo::{id}` desapareció. Repetido igual para `cancelarReserva` (recachear con un `GET`, cancelar, confirmar que se evictó de nuevo). Ambos casos confirmados. Nota del proceso: la primera pasada del test dio "falso positivo de que no pasó nada" porque nunca se había hecho el `GET` previo para poblar el caché — evictar una clave que no existe no rompe ni avisa nada, así que sin ese paso previo el test no prueba nada en ningún sentido. Suite completa sin cambios de cantidad, solo nuevas aserciones: 108/108.
+
+### Bug real de producción, encontrado recién al desplegar: los cache *hits* de verdad rompían con `ClassCastException` — y afectaba también a `Vuelo`
+
+Al probar la feature recién desplegada contra producción, `GET /api/usuarios/{id}` dio `200` la primera vez y `500` la segunda vez, con el mismo id, sin tocar nada en el medio. El log de Render mostró la excepción real (el cliente solo ve el mensaje genérico enmascarado):
+
+```
+java.lang.ClassCastException: class java.util.LinkedHashMap cannot be cast to class com.pablo.aerolinea.dto.UsuarioResponseDTO
+	at com.pablo.aerolinea.service.UsuarioService$$SpringCGLIB$$0.buscarPorIdCacheado(<generated>)
+```
+
+**Causa raíz**: `GenericJacksonJsonRedisSerializer` (la versión para Jackson 3 que ya usa este proyecto) **no activa el "default typing" automáticamente** al construirse solo con un `ObjectMapper`, a diferencia de su predecesora `GenericJackson2JsonRedisSerializer` (Jackson 2), que sí lo hacía sola. "Default typing" es lo que hace que el JSON guardado en Redis incluya el nombre completo de la clase real, para que al leerlo de vuelta Jackson sepa reconstruir el objeto correcto en vez de un `Map` genérico. Sin eso, la primera llamada (cache *miss*, va a la base, guarda en Redis) funciona igual porque el objeto que se devuelve es el que arma el service directamente — el problema aparece recién en la segunda llamada (cache *hit* real, lee de Redis y deserializa), que devuelve un `LinkedHashMap` en vez del DTO, y el cast que hace el proxy de Spring al devolverlo con el tipo declarado del método explota. Confirmado contra la documentación oficial de Spring Data Redis (nunca activa el default typing por su cuenta) y un issue conocido de Spring Boot con el mismo síntoma exacto.
+
+**Hallazgo más importante: este bug probablemente afectaba también a `Vuelo` desde que se implementó el caché, y nunca se detectó.** Repasando cómo se verificó `Vuelo` en su momento (más arriba en este archivo): el flujo siempre fue `GET` (miss, escribe) → chequear el JSON crudo en `redis-cli` → `PUT` (evict) → `GET` de nuevo (miss otra vez, porque se acababa de invalidar). **Nunca se probaron dos `GET` seguidos sin ningún evict en el medio** — que es exactamente el escenario que dispara un cache *hit* real y expone el bug. Moraleja para el futuro: verificar que el caché "escribe bien" (ver el JSON en Redis) no alcanza — hay que probar explícitamente el camino de lectura repetida, sin invalidación de por medio, porque es un escenario distinto con un código distinto ejecutándose (deserialización, no serialización).
+
+**El fix**, en `CacheConfig.cacheConfiguration()`: armar el `ObjectMapper` con el "default typing" activado explícitamente antes de pasárselo al serializer, usando un `PolymorphicTypeValidator` (del paquete `tools.jackson.databind.jsontype`, la variante Jackson 3 — no `com.fasterxml.jackson.databind.jsontype`, que es Jackson 2 y no es compatible con el `ObjectMapper` que ya usa el proyecto):
+
+```java
+PolymorphicTypeValidator validador = BasicPolymorphicTypeValidator.builder()
+        .allowIfSubType("com.pablo.aerolinea.dto")
+        .build();
+
+ObjectMapper mapperConTipos = objectMapper.rebuild()
+        .activateDefaultTyping(validador, DefaultTyping.NON_FINAL)
+        .build();
+```
+y usar `mapperConTipos` (en vez de `objectMapper` directo) al construir el `GenericJacksonJsonRedisSerializer`. Con esto, el JSON guardado en Redis pasó a verse así (formato `WRAPPER_ARRAY`: un array de dos elementos, el nombre de la clase y el objeto — una variante válida de cómo Jackson embebe el tipo, distinta pero equivalente a la clásica propiedad `@class` adentro del objeto):
+```
+["com.pablo.aerolinea.dto.UsuarioResponseDTO",{"email":"...","id":2,"nombre":"...","rol":"ADMIN"}]
+```
+
+**Verificación, en local y en producción, de los tres cache names**: `GET` dos veces seguidas al mismo id en `vuelo`, `usuario` y `reserva` → `200` en ambas (antes del fix, la segunda daba `500` en los tres). Confirmado además con `redis-cli` que el valor guardado ahora trae el tipo embebido, y que el camino especial del webhook de Stripe (evict + repoblado automático al confirmarse un pago) también funciona sin explotar — probado con un pago real de Stripe tanto en local (`stripe listen`) como en producción (contra el checkout real, sin `stripe listen`, ya que el webhook le pega directo a Render), en ambos casos con el frontend redirigiendo correctamente a la página de éxito. Suite completa sin cambios: 108/108 (este bug, al depender de la serialización real contra Redis, **no** lo detectan los tests unitarios existentes — mockean el repository y nunca pasan por Redis de verdad; la única forma real de confirmarlo fue manual, con `redis-cli`).
+
+**Detalles operativos encontrados en el camino, al desplegar este fix, sin relación con el bug de arriba**: dos causas distintas hicieron que el deploy a Render tardara o se colgara antes de llegar a probar nada:
+- **Aiven (MySQL) se había apagado por inactividad** (comportamiento normal del plan gratuito tras un tiempo sin conexiones) — el health check de Actuator no podía conectarse a la base, devolvía `503`, y Render se quedaba esperando indefinidamente un `200` que nunca llegaba (`Waiting for internal health check...`). Se resolvió entrando al dashboard de Aiven y volviendo a encender el servicio.
+- **El propio backend en Render (plan gratuito) también entra en "cold start"** tras un rato sin tráfico — al primer request nuevo, Render muestra una pantalla de "despertando" (`SERVICE WAKING UP...`) mientras reinicia la instancia, algo totalmente normal y sin relación con ningún bug, que simplemente hay que esperar (medio minuto aprox.) antes de reintentar.
 
 ---
 
@@ -786,8 +834,6 @@ Con los tres escenarios confirmados con evidencia real de `redis-cli` (no solo l
 - **Un segundo proyecto que incluya microservicios.** Anotado a pedido explícito, para después de terminar las features nuevas de AeroPass (ver roadmap) — la idea es que sirva como oportunidad de reforzar seguridad/JWT en un contexto nuevo, más un primer acercamiento real a arquitectura distribuida (comunicación entre servicios, service discovery, posiblemente un API Gateway). No se define alcance ni tecnología todavía a propósito — es una nota para el futuro, no una tarea activa.
 - **Endpoint de agregación server-side para las estadísticas del Dashboard admin.** La solución "correcta" al trade-off que rompió `DashboardPage.jsx` al paginar `Vuelo`, y después de nuevo con `Usuario`/`Reserva` — hoy resuelto de forma pragmática pidiendo `{ size: 1000 }` en las tres colecciones en vez de traer todo sin paginar. Quedaría un endpoint que calcule los totales/agregados del lado del servidor sin necesidad de traer todos los registros al cliente.
 - **Extender el cacheo con Redis a los demás endpoints de lectura que lo justifiquen.** Ya cachea `GET /api/vuelos/{id}` (prueba de concepto original), y ahora también `GET /api/usuarios/{id}` y `GET /api/reservas/{id}`. Queda pendiente revisar el resto de la API con el mismo criterio (endpoints de lectura frecuente, con costo real de ir a la base, y con una invalidación clara vía `@CacheEvict` en las mutaciones correspondientes) y decidir cuáles conviene sumar — candidatos a evaluar: `GET /api/vuelos` (la lista paginada/filtrada), `GET /api/aviones` (flota chica y estática, buen candidato porque cambia poco), y cualquier otro que aparezca al revisar. Se trabaja igual que el resto de los temas pendientes de esta lista: recién después de terminar las features nuevas que quedan en el roadmap.
-- **`crearReserva`/`cancelarReserva` no invalidan el caché `vuelo::{id}` al modificar `asientosDisponibles`.** Detectado al cerrar la feature de caché de `Usuario`/`Reserva`: durante el TTL de 10 minutos, un `GET /api/vuelos/{id}` cacheado puede mostrar `asientosDisponibles` desactualizado justo después de una reserva o cancelación sobre ese vuelo. Corrección pendiente: sumar `@CacheEvict(cacheNames = "vuelo", key = "#vueloId")` (o equivalente) en esos dos métodos de `ReservaService`.
-- **`ReservaService.cancelarReserva` no tiene `@Transactional`, a diferencia de `crearReserva`.** Notado de pasada al conectar las notificaciones por email — `cancelarReserva` modifica dos entidades (`vuelo.asientosDisponibles` y `reserva.estado`) en dos `save()` separados, igual que `crearReserva`, pero sin la anotación que garantiza que ambas escrituras sean atómicas. Si el segundo `save()` fallara, quedaría un asiento liberado sin que la reserva se haya marcado como cancelada. No es urgente (`update` simples, baja probabilidad de fallo a mitad de camino), pero es una inconsistencia real que vale la pena corregir agregando `@Transactional` a ese método también.
 - **Enviar también un email de notificación cuando un vuelo asociado cambia de estado (demorado/cancelado).** Alcance descartado a propósito al arrancar la feature de notificaciones (se eligió el alcance más chico: solo confirmación/cancelación de reserva) — quedaría pendiente evaluar si vale la pena sumarlo, tocando `VueloService` además de `ReservaService`.
 
 ---
@@ -817,5 +863,6 @@ Con los tres escenarios confirmados con evidencia real de `redis-cli` (no solo l
     - ~~Caché con Redis (`@Cacheable`/`@CacheEvict` en `GET /api/vuelos/{id}`, TTL 10 min, `CacheErrorHandler` para degradar con gracia, health check corregido, y Redis real en producción vía Render Key Value — verificado con `redis-cli` en local y en producción)~~ ✅
     - ~~Notificaciones por email (confirmación y cancelación de reserva, vía Mailtrap sandbox, `@Async` con manejo de errores resiliente, verificado con evidencia real en la bandeja de Mailtrap)~~ ✅
     - ~~Paginación server-side en `Usuario` y `Reserva` (backend con el mismo patrón de `Vuelo`, panel admin con paginación real a diferencia del truco usado en `VuelosAdminPage`, Dashboard ajustado, verificado con 108/108 tests y capturas)~~ ✅
-    - ~~Caché con Redis extendido a `Usuario` y `Reserva` (mismo patrón `@Cacheable`/`@CacheEvict` de `Vuelo`, más un caso especial de invalidación disparada desde el webhook de Stripe vía `PagoService`→`ReservaService.evictarCacheReserva`, verificado con `redis-cli` en tres escenarios incluyendo un pago real de Stripe, y 108/108 tests)~~ ✅
+    - ~~Caché con Redis extendido a `Usuario` y `Reserva` (mismo patrón `@Cacheable`/`@CacheEvict` de `Vuelo`, más un caso especial de invalidación disparada desde el webhook de Stripe vía `PagoService`→`ReservaService.evictarCacheReserva`, verificado con `redis-cli` en tres escenarios incluyendo un pago real de Stripe, y 108/108 tests). Incluyó un bug real de producción encontrado al desplegar (`ClassCastException` por falta de "default typing" en `GenericJacksonJsonRedisSerializer`, afectaba también a `Vuelo`), corregido y verificado en local y producción~~ ✅
+    - ~~Cierre de los dos gaps detectados durante la feature anterior: `crearReserva`/`cancelarReserva` ahora invalidan también `vuelo::{id}` (nuevo `VueloService.evictarCacheVuelo`, mismo patrón que el caso del webhook), y `cancelarReserva` ya tiene `@Transactional` — verificado con `redis-cli` en ambos caminos y 108/108 tests~~ ✅
 17. (Más adelante, no planificado todavía) Segundo proyecto con microservicios, enfocado en reforzar seguridad/JWT y dar un primer paso en arquitectura distribuida.
