@@ -76,10 +76,7 @@ public class VueloController {
             @RequestParam(required = false) String destino,
             @RequestParam(required = false) EstadoVuelo estado,
             @PageableDefault(size = 10, sort = "fechaSalida")Pageable pageable) {
-        Page<Vuelo> pagina = vueloService.listarTodos(origen, destino, estado, pageable);
-        Page<VueloResponseDto> paginaDTO = pagina.map(VueloMapper::toResponseDto);
-        return ResponseEntity.ok(PageMapper.tPageResponseDTO(paginaDTO));
-
+        return ResponseEntity.ok(vueloService.listarTodosCacehado(origen, destino, estado, pageable));
     }
 
     @Operation(summary = "Buscar vuelo por id", description = "Devuelve un vuelo puntual por id.")

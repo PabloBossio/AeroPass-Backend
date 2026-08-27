@@ -829,11 +829,60 @@ y usar `mapperConTipos` (en vez de `objectMapper` directo) al construir el `Gene
 
 ---
 
+## Caché con Redis extendido a listas: `GET /api/vuelos` y `GET /api/aviones`
+
+Segundo ítem tomado de la lista de "Ideas para más adelante" (el primero fue extender el caché por id a `Usuario`/`Reserva`, ver más arriba). A diferencia de todo lo anterior, que cacheaba una entidad puntual por id (`vuelo::{id}`, `usuario::{id}`, `reserva::{id}`), esto cachea **una lista/página completa de resultados**, con un patrón distinto en varios puntos clave.
+
+**Key compuesta en vez de key simple.** Cachear por id usaba `key = "#id"` — un solo parámetro, key trivial. `listarTodosCacehado(origen, destino, estado, pageable)` recibe cuatro parámetros, y todos importan para identificar una respuesta cacheada distinta (la lista de vuelos con `origen=Cordoba` no es la misma que sin filtros). Solución: no declarar ningún `key = "..."` explícito en el `@Cacheable` — sin key explícita, Spring usa por defecto el `SimpleKeyGenerator`, que arma automáticamente una key compuesta con **todos** los parámetros del método. Evidencia real vista en `redis-cli` con `KEYS *`:
+```
+vuelos-lista::SimpleKey [null, null, null, Page request [number: 0, size 10, sort: fechaSalida: ASC]]
+vuelos-lista::SimpleKey [Cordoba, miami, PROGRAMADO, Page request [number: 0, size 10, sort: fechaSalida: ASC]]
+aviones::SimpleKey []
+```
+Cada combinación distinta de filtros + paginado genera su propia entrada, y todas conviven en el mismo `cacheNames` sin pisarse entre sí. `aviones::SimpleKey []` (con array vacío) tiene sentido porque `listarAvionesCacheado` no recibe ningún parámetro — el listado de aviones no tiene filtros ni paginado.
+
+**Se cachea el DTO (`PageResponseDTO<T>`), nunca el `Page<T>` crudo.** `Page`/`PageImpl` de Spring Data no son beans simples — no serializan/deserializan bien vía JSON por defecto (no tienen constructor vacío ni setters pensados para eso). Igual que ya se cachea `VueloResponseDto`/`UsuarioResponseDTO`/etc. en vez de la entidad JPA, acá se cachea directamente `PageMapper.tPageResponseDTO(paginaDTO)` — el service arma el DTO de página completo *adentro* del método cacheado, y lo que Redis guarda es ese objeto simple, ya serializable.
+
+**`@CacheEvict(allEntries = true)`, primera vez que se usa en el proyecto.** Todo lo anterior evictaba una sola key puntual (`key = "#id"`). Acá no alcanza: al crear/editar un `Vuelo`, no hay forma de saber de antemano *cuáles* combinaciones de filtros+paginado quedaron afectadas por ese cambio (podría aparecer en la página 2 con un filtro, en la página 1 sin filtros, etc.) — la única invalidación correcta es tirar **todo** el cache de listas de una:
+```java
+@CacheEvict(cacheNames = "vuelos-lista", allEntries = true)
+```
+Mismo patrón, mismo motivo, para `aviones` al crear/editar un `Avion`.
+
+**`@Caching` para combinar dos evictions en un solo método.** El caso de `Reserva` (crear/cancelar) ya evictaba `vuelo::{id}` desde `evictarCacheVuelo` (ver el gap corregido en la feature anterior). Ahora una reserva también deja desactualizada cualquier lista cacheada que mostrara ese vuelo (por ejemplo, `asientosDisponibles`). En vez de agregar una segunda llamada separada desde `ReservaService`, se extendió el método existente para evictar ambos caches juntos, atómicamente, con una sola anotación compuesta:
+```java
+@Caching(evict = {
+        @CacheEvict(cacheNames = "vuelo", key = "#id"),
+        @CacheEvict(cacheNames = "vuelos-lista", allEntries = true)
+})
+public void evictarCacheVuelo(Long id) {
+    // Cuerpo vacío a propósito, mismo patrón que siempre.
+}
+```
+`@Caching` existe justamente para agrupar varias anotaciones del mismo tipo (o de tipos distintos, `@Cacheable`+`@CacheEvict`) sobre un solo método, cuando una sola anotación no alcanza para expresar la regla completa.
+
+**Cadena de bugs reales encontrados al aplicar la feature — todos de "capas no actualizadas en conjunto", no de lógica de caché en sí:**
+- **Regresión en el controller**: `VueloController.listarVuelos` había quedado sin actualizar — seguía llamando al `vueloService.listarTodos(...)` viejo (sin cachear) y mapeando el `Page<Vuelo>` a mano, en vez de delegar directo al nuevo `listarTodosCacehado(...)` que ya devuelve el DTO armado. Síntoma: `NullPointerException` al ejecutar el endpoint. Se corrigió reemplazando el cuerpo entero del método por una sola línea de delegación al service.
+- **`verify()` desactualizado en el test, mismo patrón de siempre ("el controller ya no llama al método viejo") pero del lado del `verify()` en vez del `when()`.** `VueloControllerTest.listarVuelos_conFiltros_deberiaPasarlosAlService` ya tenía el `when(vueloService.listarTodosCacehado(...))` actualizado, pero el `verify(vueloService).listarTodos(...)` final seguía apuntando al método viejo. El mensaje de error de Mockito fue la pista exacta: *"Wanted but not invoked: ...listarTodos(...); However, there was exactly 1 interaction with this mock: ...listarTodosCacehado(...)"* — Mockito mostrando, en el mismo mensaje, qué se esperaba versus qué realmente se llamó, algo muy útil para diagnosticar este tipo exacto de desfasaje entre test y código real.
+- **Compilación de tests desincronizada (`mvn test` normal no detectaba el fix ya aplicado).** Después de corregir el `verify()`, dos corridas seguidas de `mvn test` (con recompilación de tests reportada en la consola) siguieron mostrando el error idéntico, como si el archivo no hubiera cambiado. Se resolvió con `mvn clean test` — el `clean` borra `target/` completo antes de recompilar, eliminando cualquier `.class` de test viejo que Maven pudiera estar reutilizando por un compilado incremental desfasado. Lección: ante un fix que "no toma efecto" pese a estar bien aplicado en el código fuente, sospechar de compilación stale antes que de que el fix esté mal.
+- **Nombre de método con errata ya asentada en el código real (`listarTodosCacehado`, letras transpuestas respecto de "Cacheado").** Detectado por descarte: como el mock `when(vueloService.listarTodosCacehado(...))` compilaba, esa tenía que ser la firma real. Se mantuvo la errata tal cual (en vez de "corregirla" en el texto de las notas) para que el nombre coincida exactamente entre `VueloService`, `VueloController` y `VueloControllerTest` — Java compila contra el nombre real, no contra cómo "debería" escribirse.
+
+**Verificación manual con evidencia real de Redis, seis escenarios:**
+1. `GET /api/vuelos` sin filtros → `KEYS *` mostró `vuelos-lista::SimpleKey [null, null, null, ...]`.
+2. `GET /api/vuelos` con filtros (`origen`/`destino`/`estado`) → apareció una **segunda** key distinta, conviviendo con la anterior sin pisarla.
+3. `GET /api/aviones` → apareció `aviones::SimpleKey []`.
+4. `PUT` de edición sobre un `Vuelo` → ambas keys de `vuelos-lista::...` desaparecieron juntas (`allEntries`), sin afectar `aviones`.
+5. Edición de un `Avion` → `aviones::SimpleKey []` desapareció, sin afectar nada de `vuelos-lista`.
+6. Creación/cancelación de una `Reserva` (con `vuelo::{id}` y `vuelos-lista::...` recacheados de antemano) → **ambas** keys desaparecieron juntas en la misma operación, confirmando el `@Caching` combinado.
+
+Suite completa: 108/108 (con Docker/MySQL local levantado). **Pendiente**: repetir esta misma batería de seis escenarios contra producción (Render + Redis Key Value) una vez desplegado, siguiendo el mismo patrón que las features de caché anteriores.
+
+---
+
 ## Ideas para más adelante (explícitamente no planificar todavía)
 
 - **Un segundo proyecto que incluya microservicios.** Anotado a pedido explícito, para después de terminar las features nuevas de AeroPass (ver roadmap) — la idea es que sirva como oportunidad de reforzar seguridad/JWT en un contexto nuevo, más un primer acercamiento real a arquitectura distribuida (comunicación entre servicios, service discovery, posiblemente un API Gateway). No se define alcance ni tecnología todavía a propósito — es una nota para el futuro, no una tarea activa.
 - **Endpoint de agregación server-side para las estadísticas del Dashboard admin.** La solución "correcta" al trade-off que rompió `DashboardPage.jsx` al paginar `Vuelo`, y después de nuevo con `Usuario`/`Reserva` — hoy resuelto de forma pragmática pidiendo `{ size: 1000 }` en las tres colecciones en vez de traer todo sin paginar. Quedaría un endpoint que calcule los totales/agregados del lado del servidor sin necesidad de traer todos los registros al cliente.
-- **Extender el cacheo con Redis a los demás endpoints de lectura que lo justifiquen.** Ya cachea `GET /api/vuelos/{id}` (prueba de concepto original), y ahora también `GET /api/usuarios/{id}` y `GET /api/reservas/{id}`. Queda pendiente revisar el resto de la API con el mismo criterio (endpoints de lectura frecuente, con costo real de ir a la base, y con una invalidación clara vía `@CacheEvict` en las mutaciones correspondientes) y decidir cuáles conviene sumar — candidatos a evaluar: `GET /api/vuelos` (la lista paginada/filtrada), `GET /api/aviones` (flota chica y estática, buen candidato porque cambia poco), y cualquier otro que aparezca al revisar. Se trabaja igual que el resto de los temas pendientes de esta lista: recién después de terminar las features nuevas que quedan en el roadmap.
 - **Enviar también un email de notificación cuando un vuelo asociado cambia de estado (demorado/cancelado).** Alcance descartado a propósito al arrancar la feature de notificaciones (se eligió el alcance más chico: solo confirmación/cancelación de reserva) — quedaría pendiente evaluar si vale la pena sumarlo, tocando `VueloService` además de `ReservaService`.
 
 ---
@@ -865,4 +914,5 @@ y usar `mapperConTipos` (en vez de `objectMapper` directo) al construir el `Gene
     - ~~Paginación server-side en `Usuario` y `Reserva` (backend con el mismo patrón de `Vuelo`, panel admin con paginación real a diferencia del truco usado en `VuelosAdminPage`, Dashboard ajustado, verificado con 108/108 tests y capturas)~~ ✅
     - ~~Caché con Redis extendido a `Usuario` y `Reserva` (mismo patrón `@Cacheable`/`@CacheEvict` de `Vuelo`, más un caso especial de invalidación disparada desde el webhook de Stripe vía `PagoService`→`ReservaService.evictarCacheReserva`, verificado con `redis-cli` en tres escenarios incluyendo un pago real de Stripe, y 108/108 tests). Incluyó un bug real de producción encontrado al desplegar (`ClassCastException` por falta de "default typing" en `GenericJacksonJsonRedisSerializer`, afectaba también a `Vuelo`), corregido y verificado en local y producción~~ ✅
     - ~~Cierre de los dos gaps detectados durante la feature anterior: `crearReserva`/`cancelarReserva` ahora invalidan también `vuelo::{id}` (nuevo `VueloService.evictarCacheVuelo`, mismo patrón que el caso del webhook), y `cancelarReserva` ya tiene `@Transactional` — verificado con `redis-cli` en ambos caminos y 108/108 tests~~ ✅
+    - Caché con Redis extendido a listas (`GET /api/vuelos` con filtros+paginado, vía `SimpleKeyGenerator` para key compuesta, y `GET /api/aviones`), con `@CacheEvict(allEntries = true)` para invalidar el cache de lista completo en mutaciones, y `@Caching` combinando la eviction de `vuelo::{id}` + `vuelos-lista` en un solo método para el caso de `Reserva`. Verificado con `redis-cli` en local en los seis escenarios (poblar sin filtros, poblar con filtros distintos, poblar aviones, evict por edición de vuelo, evict por edición de avión, evict combinado por reserva) y 108/108 tests. **Verificación en producción: pendiente.**
 17. (Más adelante, no planificado todavía) Segundo proyecto con microservicios, enfocado en reforzar seguridad/JWT y dar un primer paso en arquitectura distribuida.

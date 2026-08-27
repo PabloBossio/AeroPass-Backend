@@ -48,9 +48,7 @@ public class AvionController {
 
     @GetMapping
     public List<AvionResponseDTO> listar() {
-        return avionService.listarTodos().stream()
-                .map(AvionMapper::toResponseDTO)
-                .toList();
+        return avionService.listarTodosCacheado();
     }
 
     @Operation(summary = "Buscar avión por id", description = "Devuelve un avión puntual por su id.")

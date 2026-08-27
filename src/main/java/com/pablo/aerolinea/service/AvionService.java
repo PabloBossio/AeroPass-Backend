@@ -1,11 +1,15 @@
 package com.pablo.aerolinea.service;
 
+import com.pablo.aerolinea.dto.AvionResponseDTO;
 import com.pablo.aerolinea.exception.RecursoNoEncontradoException;
 import com.pablo.aerolinea.exception.ReglaDeNegocioException;
+import com.pablo.aerolinea.mapper.AvionMapper;
 import com.pablo.aerolinea.model.Avion;
 import com.pablo.aerolinea.repository.AvionRepository;
 import com.pablo.aerolinea.repository.VueloRepository;
 import jakarta.transaction.Transactional;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -31,6 +35,7 @@ public class AvionService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = "aviones", allEntries = true)
     public Avion crearAvion(Avion avion) {
         if (avionRepository.existsByMatricula(avion.getMatricula())) {
             throw new ReglaDeNegocioException("Ya existe un avión registrado con la matricula: " + avion.getMatricula());
@@ -39,6 +44,7 @@ public class AvionService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = "aviones", allEntries = true)
     public Avion editarAvion(Long id, Avion datosNuevos) {
         Avion avionExistente = avionRepository.findById(id)
                 .orElseThrow(() -> new RecursoNoEncontradoException("No existe un avion con ese id: " + id));
@@ -59,5 +65,12 @@ public class AvionService {
         avionExistente.setAerolinea(datosNuevos.getAerolinea());
 
         return avionRepository.save(avionExistente);
+    }
+
+    @Cacheable(cacheNames = "aviones")
+    public List<AvionResponseDTO> listarTodosCacheado() {
+        return listarTodos().stream()
+                .map(AvionMapper::toResponseDTO)
+                .toList();
     }
 }

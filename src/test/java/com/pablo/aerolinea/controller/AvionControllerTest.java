@@ -4,6 +4,7 @@ import com.pablo.aerolinea.config.SecurityConfig;
 import com.pablo.aerolinea.dto.AvionRequestDTO;
 import com.pablo.aerolinea.exception.RecursoNoEncontradoException;
 import com.pablo.aerolinea.exception.ReglaDeNegocioException;
+import com.pablo.aerolinea.mapper.AvionMapper;
 import com.pablo.aerolinea.model.Avion;
 import com.pablo.aerolinea.security.JwtUtil;
 import com.pablo.aerolinea.security.UsuarioDetailsService;
@@ -115,7 +116,7 @@ public class AvionControllerTest {
                 .aerolinea("Aerolineas Argentinas")
                 .build();
 
-        when(avionService.listarTodos()).thenReturn(List.of(avion));
+        when(avionService.listarTodosCacheado()).thenReturn(List.of(AvionMapper.toResponseDTO(avion)));
 
         mockMvc.perform(get("/api/aviones"))
                 .andExpect(status().isOk())

@@ -2,8 +2,10 @@ package com.pablo.aerolinea.controller;
 
 import com.pablo.aerolinea.config.SecurityConfig;
 import com.pablo.aerolinea.dto.VueloRequestDto;
+import com.pablo.aerolinea.dto.VueloResponseDto;
 import com.pablo.aerolinea.exception.RecursoNoEncontradoException;
 import com.pablo.aerolinea.exception.ReglaDeNegocioException;
+import com.pablo.aerolinea.mapper.PageMapper;
 import com.pablo.aerolinea.mapper.VueloMapper;
 import com.pablo.aerolinea.model.Avion;
 import com.pablo.aerolinea.model.EstadoVuelo;
@@ -158,8 +160,10 @@ public class VueloControllerTest {
     void listarVuelos_deberiaDevolver200ConPaginaDeVuelos() throws Exception {
         Pageable pageable = PageRequest.of(0, 10, Sort.by("fechaSalida"));
         Page<Vuelo> pagina = new PageImpl<>(List.of(vueloCreado()), pageable, 1);
-        when(vueloService.listarTodos(isNull(), isNull(), isNull(), any(Pageable.class)))
-                .thenReturn(pagina);
+        Page<VueloResponseDto> paginaDTO = pagina.map(VueloMapper::toResponseDto);
+
+        when(vueloService.listarTodosCacehado(isNull(), isNull(), isNull(), any(Pageable.class)))
+                .thenReturn(PageMapper.tPageResponseDTO(paginaDTO));
 
         mockMvc.perform(get("/api/vuelos"))
                 .andExpect(status().isOk())
@@ -173,8 +177,10 @@ public class VueloControllerTest {
     void listarVuelos_conFiltros_deberiaPasarlosAlService() throws Exception {
         Pageable pageable = PageRequest.of(0, 10, Sort.by("fechaSalida"));
         Page<Vuelo> pagina = new PageImpl<>(List.of(vueloCreado()), pageable, 1);
-        when(vueloService.listarTodos(eq("Cordoba"), eq("Mendoza"), eq(EstadoVuelo.PROGRAMADO), any(Pageable.class)))
-                .thenReturn(pagina);
+        Page<VueloResponseDto> paginaDTO = pagina.map(VueloMapper::toResponseDto);
+
+        when(vueloService.listarTodosCacehado(eq("Cordoba"), eq("Mendoza"), eq(EstadoVuelo.PROGRAMADO), any(Pageable.class)))
+                .thenReturn(PageMapper.tPageResponseDTO(paginaDTO));
 
         mockMvc.perform(get("/api/vuelos")
                         .param("origen", "Cordoba")
@@ -183,7 +189,7 @@ public class VueloControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.contenido.length()").value(1));
 
-        verify(vueloService).listarTodos(eq("Cordoba"), eq("Mendoza"), eq(EstadoVuelo.PROGRAMADO), any(Pageable.class));
+        verify(vueloService).listarTodosCacehado(eq("Cordoba"), eq("Mendoza"), eq(EstadoVuelo.PROGRAMADO), any(Pageable.class));
     }
 
     @Test

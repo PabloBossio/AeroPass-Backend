@@ -1,8 +1,10 @@
 package com.pablo.aerolinea.service;
 
+import com.pablo.aerolinea.dto.PageResponseDTO;
 import com.pablo.aerolinea.dto.VueloResponseDto;
 import com.pablo.aerolinea.exception.RecursoNoEncontradoException;
 import com.pablo.aerolinea.exception.ReglaDeNegocioException;
+import com.pablo.aerolinea.mapper.PageMapper;
 import com.pablo.aerolinea.mapper.VueloMapper;
 import com.pablo.aerolinea.model.Avion;
 import com.pablo.aerolinea.model.EstadoVuelo;
@@ -12,6 +14,7 @@ import com.pablo.aerolinea.repository.ReservaRepository;
 import com.pablo.aerolinea.repository.VueloRepository;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -45,6 +48,7 @@ public class VueloService {
         return vueloRepository.findByOrigenAndDestino(origen, destino);
     }
 
+    @CacheEvict(cacheNames = "vuelos-lista", allEntries = true)
     public Vuelo crearVuelo(Vuelo vuelo, Long avionId) {
         Avion avion = avionRepository.findById(avionId)
                 .orElseThrow(()-> new RecursoNoEncontradoException("No existe un avión con id: " + avionId));
@@ -56,6 +60,7 @@ public class VueloService {
         return vueloRepository.save(vuelo);
     }
 
+    @CacheEvict(cacheNames = "vuelos-lista", allEntries = true)
     public Vuelo editarVuelo(Long id, Vuelo datosNuevos, Long avionId) {
         Vuelo vueloExistente =  vueloRepository.findById(id)
                 .orElseThrow(() -> new RecursoNoEncontradoException("No existe un vuelo con ese id:" + id));
@@ -76,6 +81,7 @@ public class VueloService {
         return vueloRepository.save(vueloExistente);
     }
 
+    @CacheEvict(cacheNames = "vuelos-lista", allEntries = true)
     public void eliminarVuelo(Long id) {
         Vuelo vuelo = vueloRepository.findById(id)
                 .orElseThrow(() -> new RecursoNoEncontradoException("No existe un vuelo con ese id: " + id));
@@ -109,6 +115,16 @@ public class VueloService {
                 .orElse(null);
     }
 
-    @CacheEvict(cacheNames = "vuelo", key = "#id")
+    @Cacheable(cacheNames = "vuelos-lista")
+    public PageResponseDTO<VueloResponseDto> listarTodosCacehado(String origen, String destino, EstadoVuelo estado, Pageable pageable) {
+        Page<Vuelo> pagina = listarTodos(origen, destino, estado, pageable);
+        Page<VueloResponseDto> paginaDTO = pagina.map(VueloMapper::toResponseDto);
+        return PageMapper.tPageResponseDTO(paginaDTO);
+    }
+
+    @Caching(evict = {
+            @CacheEvict(cacheNames = "vuelo", key = "#id"),
+            @CacheEvict(cacheNames = "vuelos-lista", allEntries = true)
+    })
     public void evictarCacheVuelo(Long id) {}
 }
