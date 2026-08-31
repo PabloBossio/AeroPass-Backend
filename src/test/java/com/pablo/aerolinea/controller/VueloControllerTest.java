@@ -304,4 +304,18 @@ public class VueloControllerTest {
         mockMvc.perform(delete("/api/vuelos/1"))
                 .andExpect(status().isBadRequest());
     }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void cambiarEstado_deberiaDevolver200() throws Exception {
+        Vuelo vuelo = vueloCreado();
+        vuelo.setEstado(EstadoVuelo.DEMORADO);
+
+        when(vueloService.cambiarEstado(eq(1L), eq(EstadoVuelo.DEMORADO))).thenReturn(vuelo);
+
+        mockMvc.perform(put("/api/vuelos/1/estado")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"estado\":\"DEMORADO\"}"))
+                .andExpect(status().isOk());
+    }
  }

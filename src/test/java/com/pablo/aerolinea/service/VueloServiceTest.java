@@ -2,9 +2,7 @@ package com.pablo.aerolinea.service;
 
 import com.pablo.aerolinea.exception.RecursoNoEncontradoException;
 import com.pablo.aerolinea.exception.ReglaDeNegocioException;
-import com.pablo.aerolinea.model.Avion;
-import com.pablo.aerolinea.model.EstadoVuelo;
-import com.pablo.aerolinea.model.Vuelo;
+import com.pablo.aerolinea.model.*;
 import com.pablo.aerolinea.repository.AvionRepository;
 import com.pablo.aerolinea.repository.ReservaRepository;
 import com.pablo.aerolinea.repository.VueloRepository;
@@ -38,6 +36,9 @@ public class VueloServiceTest {
     @Mock
     private ReservaRepository reservaRepository;
 
+    @Mock
+    private EmailService emailService;
+
     @InjectMocks
     private VueloService vueloService;
 
@@ -60,6 +61,20 @@ public class VueloServiceTest {
                 .precio(new BigDecimal("850.00"))
                 .asientosDisponibles(150)
                 .build();
+    }
+
+    private Usuario usuarioValido() {
+        Usuario usuario = new Usuario();
+        usuario.setNombre("Pablo");
+        usuario.setEmail("pablo@test.com");
+        return usuario;
+    }
+
+    private Reserva reservaConEstado(EstadoReserva estado) {
+        Reserva reserva = new Reserva();
+        reserva.setEstado(estado);
+        reserva.setUsuario(usuarioValido());
+        return reserva;
     }
 
     @Test
@@ -239,5 +254,99 @@ public class VueloServiceTest {
 
         assertEquals(1, resultado.getTotalElements());
         verify(vueloRepository).buscarConFiltros("Cordoba", "Mendoza", EstadoVuelo.PROGRAMADO, pageable);
+    }
+
+    @Test
+    void cambiarEstado_aDemorado_deberiaNotificarReservasActivas() {
+        Vuelo vuelo = vueloValido();
+        vuelo.setId(1L);
+        vuelo.setEstado(EstadoVuelo.PROGRAMADO);
+
+        Reserva confirmada = reservaConEstado(EstadoReserva.CONFIRMADA);
+
+        when(vueloRepository.findById(1L)).thenReturn(Optional.of(vuelo));
+        when(vueloRepository.save(any(Vuelo.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(reservaRepository.findByVueloId(1L)).thenReturn(List.of(confirmada));
+
+        Vuelo resultado = vueloService.cambiarEstado(1L, EstadoVuelo.DEMORADO);
+
+        assertEquals(EstadoVuelo.DEMORADO, resultado.getEstado());
+        verify(emailService, times(1)).enviarAvisoVueloDemorado(
+                eq("Pablo"), eq("pablo@test.com"), any(), any(), any());
+        verify(emailService, never()).enviarAvisoVueloCancelado(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void cambiarEstado_aCancelado_deberiaUsarElMetodoDeCancelado() {
+        Vuelo vuelo = vueloValido();
+        vuelo.setId(1L);
+        vuelo.setEstado(EstadoVuelo.PROGRAMADO);
+
+        Reserva confirmada = reservaConEstado(EstadoReserva.CONFIRMADA);
+
+        when(vueloRepository.findById(1L)).thenReturn(Optional.of(vuelo));
+        when(vueloRepository.save(any(Vuelo.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(reservaRepository.findByVueloId(1L)).thenReturn(List.of(confirmada));
+
+        vueloService.cambiarEstado(1L, EstadoVuelo.CANCELADO);
+
+        verify(emailService, times(1)).enviarAvisoVueloCancelado(any(), any(), any(), any(), any());
+        verify(emailService, never()).enviarAvisoVueloDemorado(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void cambiarEstado_aProgramado_noDeberiaEnviarEmail() {
+        Vuelo vuelo = vueloValido();
+        vuelo.setId(1L);
+        vuelo.setEstado(EstadoVuelo.DEMORADO);
+
+        when(vueloRepository.findById(1L)).thenReturn(Optional.of(vuelo));
+        when(vueloRepository.save(any(Vuelo.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        vueloService.cambiarEstado(1L, EstadoVuelo.PROGRAMADO);
+
+        verifyNoInteractions(emailService);
+    }
+
+    @Test
+    void cambiarEstado_mismoEstado_noDeberiaHacerNada() {
+        Vuelo vuelo = vueloValido();
+        vuelo.setId(1L);
+        vuelo.setEstado(EstadoVuelo.DEMORADO);
+
+        when(vueloRepository.findById(1L)).thenReturn(Optional.of(vuelo));
+
+        Vuelo resultado = vueloService.cambiarEstado(1L, EstadoVuelo.DEMORADO);
+
+        assertEquals(vuelo, resultado);
+        verify(vueloRepository, never()).save(any());
+        verifyNoInteractions(emailService);
+    }
+
+    @Test
+    void cambiarEstado_vueloInexistente_deberiaLanzarExcepcion() {
+        when(vueloRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThrows(RecursoNoEncontradoException.class, () -> vueloService.cambiarEstado(99L, EstadoVuelo.DEMORADO));
+
+        verify(vueloRepository, never()).save(any());
+        verifyNoInteractions(emailService);
+    }
+
+    @Test
+    void cambiarEstado_reservaCancelada_noDeberiaRecibirEmail() {
+        Vuelo vuelo = vueloValido();
+        vuelo.setId(1L);
+        vuelo.setEstado(EstadoVuelo.PROGRAMADO);
+
+        Reserva cancelada = reservaConEstado(EstadoReserva.CANCELADA);
+
+        when(vueloRepository.findById(1L)).thenReturn(Optional.of(vuelo));
+        when(vueloRepository.save(any(Vuelo.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(reservaRepository.findByVueloId(1L)).thenReturn(List.of(cancelada));
+
+        vueloService.cambiarEstado(1L, EstadoVuelo.DEMORADO);
+
+        verifyNoInteractions(emailService);
     }
 }

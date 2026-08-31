@@ -73,5 +73,36 @@ public class EmailService {
         }
     }
 
+    @Async
+    public void enviarAvisoVueloDemorado(String nombreUsuario, String email, String origen, String destino,
+                                         LocalDateTime fechaSalida) {
+        String cuerpo = """
+                Hola %s, 
+                
+                Tu vuelo sufrió una demora.
+                
+                Vuelo: %s -> %s
+                Fecha Salida: %s
+                
+                Te recomendamos estar atento a nuevas actuñizaciones antes de dirigirte al aeropuerto.
+                """.formatted(nombreUsuario, origen, destino, fechaSalida.format(FORMATO_FECHA));
+        enviar(email, "Tu vuelo en AeroPass sufrió una demora", cuerpo);
+    }
+
+    @Async
+    public void enviarAvisoVueloCancelado(String nombreUsuario, String email, String origen, String destino,
+                                          LocalDateTime fechaSalida) {
+        String cuerpo = """
+                Hola %s,
+                
+                Lamentamos informarte que tu vuelo fue cancelado.
+                
+                Vuelo: %s -> %s
+                Fecha Salida: %s
+                
+                Podés contactarnos para coordinar un reembolso o una reprogramación.
+                """.formatted(nombreUsuario, origen, destino, fechaSalida.format(FORMATO_FECHA));
+        enviar(email, "Tu vuelo en AeroPass fue cancelado", cuerpo);
+    }
 
 }

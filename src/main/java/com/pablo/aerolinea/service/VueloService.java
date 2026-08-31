@@ -6,9 +6,7 @@ import com.pablo.aerolinea.exception.RecursoNoEncontradoException;
 import com.pablo.aerolinea.exception.ReglaDeNegocioException;
 import com.pablo.aerolinea.mapper.PageMapper;
 import com.pablo.aerolinea.mapper.VueloMapper;
-import com.pablo.aerolinea.model.Avion;
-import com.pablo.aerolinea.model.EstadoVuelo;
-import com.pablo.aerolinea.model.Vuelo;
+import com.pablo.aerolinea.model.*;
 import com.pablo.aerolinea.repository.AvionRepository;
 import com.pablo.aerolinea.repository.ReservaRepository;
 import com.pablo.aerolinea.repository.VueloRepository;
@@ -28,12 +26,14 @@ public class VueloService {
     private final VueloRepository vueloRepository;
     private final AvionRepository avionRepository;
     private final ReservaRepository reservaRepository;
+    private final EmailService emailService;
 
 
-    public VueloService(VueloRepository vueloRepository, AvionRepository avionRepository, ReservaRepository reservaRepository) {
+    public VueloService(VueloRepository vueloRepository, AvionRepository avionRepository, ReservaRepository reservaRepository, EmailService emailService) {
         this.vueloRepository = vueloRepository;
         this.avionRepository = avionRepository;
         this.reservaRepository = reservaRepository;
+        this.emailService = emailService;
     }
 
     public Page<Vuelo> listarTodos(String origen, String destino, EstadoVuelo estado, Pageable pageable) {
@@ -120,6 +120,49 @@ public class VueloService {
         Page<Vuelo> pagina = listarTodos(origen, destino, estado, pageable);
         Page<VueloResponseDto> paginaDTO = pagina.map(VueloMapper::toResponseDto);
         return PageMapper.tPageResponseDTO(paginaDTO);
+    }
+
+    @Caching(evict = {
+            @CacheEvict(cacheNames = "vuelo", key = "#id"),
+            @CacheEvict(cacheNames = "vuelos-lista", allEntries = true)
+    })
+
+    public Vuelo cambiarEstado(Long id, EstadoVuelo nuevoEstado) {
+        Vuelo vuelo = vueloRepository.findById(id)
+                .orElseThrow(() -> new RecursoNoEncontradoException("No existe un vuelo con ese id: " + id));
+
+        if (vuelo.getEstado() == nuevoEstado) {
+            return vuelo;
+        }
+
+        vuelo.setEstado(nuevoEstado);
+        Vuelo actualizado = vueloRepository.save(vuelo);
+
+        if (nuevoEstado == EstadoVuelo.DEMORADO || nuevoEstado == EstadoVuelo.CANCELADO) {
+            notificarCambioEstado(actualizado, nuevoEstado);
+        }
+
+        return actualizado;
+    }
+
+    private void notificarCambioEstado(Vuelo vuelo, EstadoVuelo nuevoEstado) {
+        List<Reserva> reservas = reservaRepository.findByVueloId(vuelo.getId());
+
+        for (Reserva reserva : reservas) {
+            if (reserva.getEstado() == EstadoReserva.CANCELADA) {
+                continue;
+            }
+
+            Usuario usuario = reserva.getUsuario();
+
+            if (nuevoEstado == EstadoVuelo.DEMORADO) {
+                emailService.enviarAvisoVueloDemorado(usuario.getNombre(), usuario.getEmail(),
+                        vuelo.getOrigen(), vuelo.getDestino(), vuelo.getFechaSalida());
+            } else {
+                emailService.enviarAvisoVueloCancelado(usuario.getNombre(), usuario.getEmail(),
+                        vuelo.getOrigen(), vuelo.getDestino(), vuelo.getFechaSalida());
+            }
+        }
     }
 
     @Caching(evict = {

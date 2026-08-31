@@ -1,5 +1,6 @@
 package com.pablo.aerolinea.controller;
 
+import com.pablo.aerolinea.dto.CambiarEstadoVueloRequestDTO;
 import com.pablo.aerolinea.dto.PageResponseDTO;
 import com.pablo.aerolinea.dto.VueloRequestDto;
 import com.pablo.aerolinea.dto.VueloResponseDto;
@@ -117,4 +118,19 @@ public class VueloController {
         return ResponseEntity.noContent().build();
     }
 
+
+    @Operation(summary = "Cambiar estado de un vuelo",
+                description = "Actualiza el estado de un vuelo. si pasa a DEMORADO o CANCELADO, notifica a los usuarios con reservas activas sobre ese vuelo.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Estado actualizado con éxito."),
+            @ApiResponse(responseCode = "400", description = "Estado inválido o faltante."),
+            @ApiResponse(responseCode = "403", description = "No autenticado o sin rol ADMIN."),
+            @ApiResponse(responseCode = "404", description = "No existe un vuelo con ese id.")
+    })
+    @PutMapping("/{id}/estado")
+    public ResponseEntity<VueloResponseDto> cambiarEstado(@PathVariable Long id,
+                                                          @Valid @RequestBody CambiarEstadoVueloRequestDTO request) {
+        Vuelo actualizado = vueloService.cambiarEstado(id, request.getEstado());
+        return ResponseEntity.ok(VueloMapper.toResponseDto(actualizado));
+    }
 }

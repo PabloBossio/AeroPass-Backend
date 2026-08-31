@@ -829,7 +829,7 @@ y usar `mapperConTipos` (en vez de `objectMapper` directo) al construir el `Gene
 
 ---
 
-## Caché con Redis extendido a listas: `GET /api/vuelos` y `GET /api/aviones`
+## Caché con Redis extendido a listas: `GET /api/vuelos` y `GET /api/aviones` ✅
 
 Segundo ítem tomado de la lista de "Ideas para más adelante" (el primero fue extender el caché por id a `Usuario`/`Reserva`, ver más arriba). A diferencia de todo lo anterior, que cacheaba una entidad puntual por id (`vuelo::{id}`, `usuario::{id}`, `reserva::{id}`), esto cachea **una lista/página completa de resultados**, con un patrón distinto en varios puntos clave.
 
@@ -875,7 +875,48 @@ public void evictarCacheVuelo(Long id) {
 5. Edición de un `Avion` → `aviones::SimpleKey []` desapareció, sin afectar nada de `vuelos-lista`.
 6. Creación/cancelación de una `Reserva` (con `vuelo::{id}` y `vuelos-lista::...` recacheados de antemano) → **ambas** keys desaparecieron juntas en la misma operación, confirmando el `@Caching` combinado.
 
-Suite completa: 108/108 (con Docker/MySQL local levantado). **Pendiente**: repetir esta misma batería de seis escenarios contra producción (Render + Redis Key Value) una vez desplegado, siguiendo el mismo patrón que las features de caché anteriores.
+Suite completa: 108/108 (con Docker/MySQL local levantado). Los mismos seis escenarios se repitieron después contra producción (Render + Redis Key Value) con resultado idéntico — ver abajo.
+
+### Verificación en producción, y dos problemas operativos reales encontrados en el camino (nada de código, ambos del lado de infraestructura/red)
+
+Los seis escenarios se repitieron contra el Redis real de Render (Key Value, plan gratuito) y dieron exactamente el mismo resultado que en local: las dos keys de `vuelos-lista::...` (sin filtros y con filtros) y `aviones::SimpleKey []` conviviendo sin pisarse, eviction completa de `vuelos-lista` al editar un `Vuelo`, eviction de `aviones` al editar un `Avion`, y eviction combinada de `vuelo::{id}` + `vuelos-lista` al operar sobre una `Reserva`. Ningún hallazgo de código nuevo — la feature funciona igual en ambos entornos.
+
+Lo que sí costó fue simplemente **llegar a conectarse** al Redis de producción desde Windows con `redis-cli`, por dos motivos separados, ninguno relacionado con el proyecto en sí:
+
+- **DNS de Fibertel (el ISP) secuestrando la resolución del hostname.** `nslookup ohio-keyvalue.render.com` devolvía una respuesta "no autoritativa" con el nombre mutado a `ohio-keyvalue.render.com.com.ar` y una IP que no tenía nada que ver con Render — el comportamiento típico de un ISP que, ante un dominio que su propio resolver no tiene resuelto de forma confiable, en vez de devolver un error limpio te redirige a una página propia de búsqueda/anuncios. Cambiar el DNS de la consulta a `8.8.8.8` (Google) **no alcanzó**, porque Fibertel intercepta el tráfico DNS a nivel de red, no solo el servidor configurado. Se confirmó que el hostname era legítimo resolviéndolo desde una red totalmente distinta (herramienta externa, `getent hosts` fuera de la red de Fibertel), que sí devolvió IPs reales de AWS en la región Ohio. **Workaround aplicado**: agregar una entrada manual en el archivo `hosts` de Windows (`C:\Windows\System32\drivers\etc\hosts`, editado como administrador) mapeando el hostname a una de esas IPs reales, más `ipconfig /flushdns` — como la conexión es TLS, el certificado sigue validando contra el nombre de dominio (no la IP), así que forzarlo en `hosts` no rompe la validación TLS.
+- **El comando de conexión que ofrece el dashboard de Render no es directamente pegable.** Render sugiere un comando con sintaxis `REDISCLI_AUTH=<password> valkey-cli --user ... -h ... -p ... --tls` — sintaxis válida de shell (variable de entorno inline antes del comando) pero que no funciona pasada tal cual como argumentos de `docker exec` (Docker interpreta literalmente el primer token como el ejecutable a correr, no como una asignación de variable). Además, asume el binario `valkey-cli` (el fork que usa Render), que no existe en la imagen `redis:7-alpine` que corre en este proyecto — ahí solo está `redis-cli`. Traducción que sí funcionó, usando el flag `-a` para la password en vez de la variable de entorno:
+  ```powershell
+  docker exec -it aerolinea-redis redis-cli --user <usuario> -h ohio-keyvalue.render.com -p 6379 --tls -a <password>
+  ```
+  Lección general: un comando "armado" por la interfaz de un proveedor externo (Render, en este caso) asume un entorno de ejecución específico (su propia shell, su propio cliente) — hay que revisar qué asume exactamente antes de pegarlo tal cual en un contexto distinto (acá: Windows + Docker + la imagen oficial de Redis, no la de Render).
+
+---
+
+## Email de aviso cuando un `Vuelo` cambia a `DEMORADO` o `CANCELADO` ✅
+
+Idea tomada de la lista de "para más adelante", descartada a propósito al hacer la feature original de notificaciones (que se limitó a confirmación/cancelación de `Reserva`). Distinta de todo lo anterior en un aspecto clave: no es un aviso de uno-a-uno (el usuario hace algo con su propia reserva), sino de **uno-a-muchos** — un vuelo cambia de estado, y hay que avisarle a **todos** los usuarios con una reserva activa sobre ese vuelo.
+
+**Primer hallazgo, antes de escribir nada: no existía ninguna forma de cambiar el `estado` de un `Vuelo` vía la API.** `editarVuelo` nunca tocaba ese campo — se seteaba una única vez, fijo en `PROGRAMADO`, dentro de `crearVuelo`. Por eso la decisión correcta no fue meter `estado` dentro del PUT genérico de edición, sino agregar un endpoint dedicado (`PUT /api/vuelos/{id}/estado`, con un DTO chico y propio, `CambiarEstadoVueloRequestDto`) — mismo criterio ya usado para `PUT /api/reservas/{id}/cancelar`: un cambio de estado es una acción de negocio distinta de una edición de datos.
+
+**Diseño del método central, `VueloService.cambiarEstado`:**
+- **Guard de idempotencia**: si `nuevoEstado` es igual al que ya tenía el vuelo, el método corta ahí (`return vuelo`), sin guardar ni mandar nada. Sin esto, pisar el mismo estado dos veces (algo fácil de hacer por error desde un panel admin) dispararía un mail duplicado cada vez.
+- **Filtro de reservas a notificar**: se excluyen las reservas en estado `CANCELADA` (`reservaRepository.findByVueloId(id)`, nuevo método derivado) — no tiene sentido avisarle a alguien que ya canceló su propia reserva que el vuelo se demoró.
+- **Dos métodos de email distintos** en `EmailService` (`enviarAvisoVueloDemorado` / `enviarAvisoVueloCancelado`), mismo estilo exacto (`@Async`, texto plano, mismo `DateTimeFormatter`) que los ya existentes para confirmación/cancelación de reserva — ninguna sorpresa arquitectónica, solo más de lo mismo aplicado a un disparador distinto.
+- **Un solo `@Caching` en el service, no repartido entre controller y service.** A diferencia de `editarVuelo`/`editar` (que hoy evictan `vuelo::id` desde el controller y `vuelos-lista` desde el service, en dos lugares distintos), `cambiarEstado` agrupa ambas evictions en una sola anotación sobre el propio método del service — más prolijo, y una oportunidad para que Pablo compare los dos estilos en su propio código.
+
+**Bug real encontrado en el camino: Jackson y los enums son case-sensitive, sin excepciones.** El primer intento del test de controller mandó `{"estado":"demorado"}` en minúscula. Como `EstadoVuelo.DEMORADO` es la constante real (mayúscula), Jackson no pudo deserializar el JSON en absoluto — ni siquiera llegó a la validación de Bean Validation, porque el fallo ocurre un paso antes, al convertir el JSON a objeto Java. Por eso el error fue `HttpMessageNotReadableException` ("JSON invalido", 400) y no un error de validación con detalle de campo. Mismo tipo de lección ya anotada antes con el claim `"rol"` vs `"Rol"` del JWT: los nombres son exactos, sin normalización automática de mayúsculas/minúsculas en ningún lado de Jackson.
+
+**Tests nuevos en `VueloServiceTest`** (mismo patrón `@Mock`/`@InjectMocks`/`verify` ya conocido, con un `EmailService` mockeado nuevo): pasa a `DEMORADO` → dispara el método correcto; pasa a `CANCELADO` → dispara el otro método (y no el de demora); pasa a un estado neutro (`PROGRAMADO`/`EN_VUELO`/`FINALIZADO`) → `verifyNoInteractions(emailService)`; mismo estado repetido → ni guarda ni notifica; vuelo inexistente → `RecursoNoEncontradoException` sin tocar el email; una reserva `CANCELADA` mezclada con una activa → solo la activa recibe el mail. Más un test de camino feliz en `VueloControllerTest` a nivel HTTP. Total: 7 tests nuevos, suite completa **115/115**.
+
+**Verificación manual con evidencia real, en local (Mailtrap + `redis-cli`), sobre un vuelo con una reserva `CONFIRMADA` real:**
+1. `PUT` a `DEMORADO` → llegó el mail correcto a Mailtrap, con el nombre del usuario, la ruta y la fecha de salida reales.
+2. Repetir el mismo `PUT` a `DEMORADO` → ningún mail nuevo (idempotencia confirmada en runtime, no solo en el test).
+3. `PUT` a `CANCELADO` → mail distinto y correcto.
+4. Repetir `CANCELADO` → sin duplicar.
+5. `PUT` a un estado neutro (`PROGRAMADO`) → sin ningún mail.
+6. Cache: `GET /api/vuelos/2` + `GET /api/vuelos` poblaron `vuelo::2` y `vuelos-lista::...`; el `PUT` del punto 5 evictó **ambas** juntas (`KEYS *` dio `empty array` después), confirmando el `@Caching` combinado también para este método nuevo.
+
+**Pendiente**: repetir la batería contra producción (Mailtrap ya es el mismo servicio en ambos entornos, así que el riesgo real ahí es solo de deploy/config, no de lógica).
 
 ---
 
@@ -883,7 +924,6 @@ Suite completa: 108/108 (con Docker/MySQL local levantado). **Pendiente**: repet
 
 - **Un segundo proyecto que incluya microservicios.** Anotado a pedido explícito, para después de terminar las features nuevas de AeroPass (ver roadmap) — la idea es que sirva como oportunidad de reforzar seguridad/JWT en un contexto nuevo, más un primer acercamiento real a arquitectura distribuida (comunicación entre servicios, service discovery, posiblemente un API Gateway). No se define alcance ni tecnología todavía a propósito — es una nota para el futuro, no una tarea activa.
 - **Endpoint de agregación server-side para las estadísticas del Dashboard admin.** La solución "correcta" al trade-off que rompió `DashboardPage.jsx` al paginar `Vuelo`, y después de nuevo con `Usuario`/`Reserva` — hoy resuelto de forma pragmática pidiendo `{ size: 1000 }` en las tres colecciones en vez de traer todo sin paginar. Quedaría un endpoint que calcule los totales/agregados del lado del servidor sin necesidad de traer todos los registros al cliente.
-- **Enviar también un email de notificación cuando un vuelo asociado cambia de estado (demorado/cancelado).** Alcance descartado a propósito al arrancar la feature de notificaciones (se eligió el alcance más chico: solo confirmación/cancelación de reserva) — quedaría pendiente evaluar si vale la pena sumarlo, tocando `VueloService` además de `ReservaService`.
 
 ---
 
@@ -914,5 +954,6 @@ Suite completa: 108/108 (con Docker/MySQL local levantado). **Pendiente**: repet
     - ~~Paginación server-side en `Usuario` y `Reserva` (backend con el mismo patrón de `Vuelo`, panel admin con paginación real a diferencia del truco usado en `VuelosAdminPage`, Dashboard ajustado, verificado con 108/108 tests y capturas)~~ ✅
     - ~~Caché con Redis extendido a `Usuario` y `Reserva` (mismo patrón `@Cacheable`/`@CacheEvict` de `Vuelo`, más un caso especial de invalidación disparada desde el webhook de Stripe vía `PagoService`→`ReservaService.evictarCacheReserva`, verificado con `redis-cli` en tres escenarios incluyendo un pago real de Stripe, y 108/108 tests). Incluyó un bug real de producción encontrado al desplegar (`ClassCastException` por falta de "default typing" en `GenericJacksonJsonRedisSerializer`, afectaba también a `Vuelo`), corregido y verificado en local y producción~~ ✅
     - ~~Cierre de los dos gaps detectados durante la feature anterior: `crearReserva`/`cancelarReserva` ahora invalidan también `vuelo::{id}` (nuevo `VueloService.evictarCacheVuelo`, mismo patrón que el caso del webhook), y `cancelarReserva` ya tiene `@Transactional` — verificado con `redis-cli` en ambos caminos y 108/108 tests~~ ✅
-    - Caché con Redis extendido a listas (`GET /api/vuelos` con filtros+paginado, vía `SimpleKeyGenerator` para key compuesta, y `GET /api/aviones`), con `@CacheEvict(allEntries = true)` para invalidar el cache de lista completo en mutaciones, y `@Caching` combinando la eviction de `vuelo::{id}` + `vuelos-lista` en un solo método para el caso de `Reserva`. Verificado con `redis-cli` en local en los seis escenarios (poblar sin filtros, poblar con filtros distintos, poblar aviones, evict por edición de vuelo, evict por edición de avión, evict combinado por reserva) y 108/108 tests. **Verificación en producción: pendiente.**
+    - ~~Caché con Redis extendido a listas (`GET /api/vuelos` con filtros+paginado, vía `SimpleKeyGenerator` para key compuesta, y `GET /api/aviones`), con `@CacheEvict(allEntries = true)` para invalidar el cache de lista completo en mutaciones, y `@Caching` combinando la eviction de `vuelo::{id}` + `vuelos-lista` en un solo método para el caso de `Reserva`. Verificado con `redis-cli` en los seis escenarios (poblar sin filtros, poblar con filtros distintos, poblar aviones, evict por edición de vuelo, evict por edición de avión, evict combinado por reserva), tanto en local como en producción, y 108/108 tests~~ ✅
+    - Email de aviso cuando un `Vuelo` pasa a `DEMORADO` o `CANCELADO` (endpoint nuevo `PUT /api/vuelos/{id}/estado`, notificación uno-a-muchos a todas las reservas activas sobre ese vuelo, guard de idempotencia, `@Caching` combinado para el cache). Verificado con evidencia real de Mailtrap y `redis-cli` en los seis escenarios (demora, repetido sin duplicar, cancelación, repetido sin duplicar, estado neutro sin mail, eviction de cache), y 115/115 tests. **Verificación en producción: pendiente.**
 17. (Más adelante, no planificado todavía) Segundo proyecto con microservicios, enfocado en reforzar seguridad/JWT y dar un primer paso en arquitectura distribuida.
