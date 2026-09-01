@@ -234,10 +234,10 @@ public class VueloServiceTest {
     void listarTodos_sinFiltros_deberiaDevolverUnaPaginaDeVuelos() {
         Pageable pageable = PageRequest.of(0, 10);
         Page<Vuelo> paginaEsperada = new PageImpl<>(List.of(vueloValido()), pageable, 1);
-        when(vueloRepository.buscarConFiltros(null, null, null, pageable))
+        when(vueloRepository.buscarConFiltros(null, null, null, false,pageable))
                 .thenReturn(paginaEsperada);
 
-        Page<Vuelo> resultado = vueloService.listarTodos(null, null, null, pageable);
+        Page<Vuelo> resultado = vueloService.listarTodos(null, null, null, false, pageable);
 
         assertEquals(1, resultado.getTotalElements());
         assertEquals(1, resultado.getContent().size());
@@ -247,13 +247,13 @@ public class VueloServiceTest {
     void listarTodos_conFiltros_deberiaPasarlosAlRepository() {
         Pageable pageable = PageRequest.of(0, 10);
         Page<Vuelo> paginaEsperada = new PageImpl<>(List.of(vueloValido()), pageable, 1);
-        when(vueloRepository.buscarConFiltros("Cordoba", "Mendoza", EstadoVuelo.PROGRAMADO, pageable))
+        when(vueloRepository.buscarConFiltros("Cordoba", "Mendoza", EstadoVuelo.PROGRAMADO, false, pageable))
                 .thenReturn(paginaEsperada);
 
-        Page<Vuelo> resultado = vueloService.listarTodos("Cordoba", "Mendoza", EstadoVuelo.PROGRAMADO, pageable);
+        Page<Vuelo> resultado = vueloService.listarTodos("Cordoba", "Mendoza", EstadoVuelo.PROGRAMADO, false, pageable);
 
         assertEquals(1, resultado.getTotalElements());
-        verify(vueloRepository).buscarConFiltros("Cordoba", "Mendoza", EstadoVuelo.PROGRAMADO, pageable);
+        verify(vueloRepository).buscarConFiltros("Cordoba", "Mendoza", EstadoVuelo.PROGRAMADO, false, pageable);
     }
 
     @Test

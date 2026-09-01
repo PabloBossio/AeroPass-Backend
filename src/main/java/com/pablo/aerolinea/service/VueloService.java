@@ -36,8 +36,8 @@ public class VueloService {
         this.emailService = emailService;
     }
 
-    public Page<Vuelo> listarTodos(String origen, String destino, EstadoVuelo estado, Pageable pageable) {
-        return vueloRepository.buscarConFiltros(origen, destino, estado, pageable);
+    public Page<Vuelo> listarTodos(String origen, String destino, EstadoVuelo estado,boolean soloReservables ,Pageable pageable) {
+        return vueloRepository.buscarConFiltros(origen, destino, estado, soloReservables, pageable);
     }
 
     public Optional<Vuelo> buscarPorId(Long id) {
@@ -116,8 +116,8 @@ public class VueloService {
     }
 
     @Cacheable(cacheNames = "vuelos-lista")
-    public PageResponseDTO<VueloResponseDto> listarTodosCacehado(String origen, String destino, EstadoVuelo estado, Pageable pageable) {
-        Page<Vuelo> pagina = listarTodos(origen, destino, estado, pageable);
+    public PageResponseDTO<VueloResponseDto> listarTodosCacehado(String origen, String destino, EstadoVuelo estado, boolean soloReservables, Pageable pageable) {
+        Page<Vuelo> pagina = listarTodos(origen, destino, estado, soloReservables,pageable);
         Page<VueloResponseDto> paginaDTO = pagina.map(VueloMapper::toResponseDto);
         return PageMapper.tPageResponseDTO(paginaDTO);
     }

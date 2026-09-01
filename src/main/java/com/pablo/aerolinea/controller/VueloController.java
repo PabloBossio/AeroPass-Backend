@@ -76,8 +76,9 @@ public class VueloController {
             @RequestParam(required = false) String origen,
             @RequestParam(required = false) String destino,
             @RequestParam(required = false) EstadoVuelo estado,
+            @RequestParam(required = false, defaultValue = "false") boolean soloReservables,
             @PageableDefault(size = 10, sort = "fechaSalida")Pageable pageable) {
-        return ResponseEntity.ok(vueloService.listarTodosCacehado(origen, destino, estado, pageable));
+        return ResponseEntity.ok(vueloService.listarTodosCacehado(origen, destino, estado, soloReservables,pageable));
     }
 
     @Operation(summary = "Buscar vuelo por id", description = "Devuelve un vuelo puntual por id.")

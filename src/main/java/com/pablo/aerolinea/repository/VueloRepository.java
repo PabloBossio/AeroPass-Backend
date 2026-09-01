@@ -27,9 +27,13 @@ public interface VueloRepository extends JpaRepository<Vuelo, Long>{
     @Query("SELECT v FROM Vuelo v WHERE " +
             "(:origen IS NULL OR v.origen = :origen) AND " +
             "(:destino IS NULL OR v.destino = :destino) AND " +
-            "(:estado IS NULL OR v.estado = :estado)")
+            "(:estado IS NULL OR v.estado = :estado) AND" +
+            "(:soloReservables = false OR v.estado NOT IN (" +
+            "com.pablo.aerolinea.model.EstadoVuelo.CANCELADO, " +
+            "com.pablo.aerolinea.model.EstadoVuelo.FINALIZADO))")
     Page<Vuelo> buscarConFiltros(@Param("origen")String origen,
                                  @Param("destino")String destino,
                                  @Param("estado")EstadoVuelo estado,
+                                 @Param("soloReservables")Boolean soloReservables,
                                  Pageable pageable);
 }

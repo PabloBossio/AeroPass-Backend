@@ -162,7 +162,7 @@ public class VueloControllerTest {
         Page<Vuelo> pagina = new PageImpl<>(List.of(vueloCreado()), pageable, 1);
         Page<VueloResponseDto> paginaDTO = pagina.map(VueloMapper::toResponseDto);
 
-        when(vueloService.listarTodosCacehado(isNull(), isNull(), isNull(), any(Pageable.class)))
+        when(vueloService.listarTodosCacehado(isNull(), isNull(), isNull(), eq(false),any(Pageable.class)))
                 .thenReturn(PageMapper.tPageResponseDTO(paginaDTO));
 
         mockMvc.perform(get("/api/vuelos"))
@@ -179,7 +179,7 @@ public class VueloControllerTest {
         Page<Vuelo> pagina = new PageImpl<>(List.of(vueloCreado()), pageable, 1);
         Page<VueloResponseDto> paginaDTO = pagina.map(VueloMapper::toResponseDto);
 
-        when(vueloService.listarTodosCacehado(eq("Cordoba"), eq("Mendoza"), eq(EstadoVuelo.PROGRAMADO), any(Pageable.class)))
+        when(vueloService.listarTodosCacehado(eq("Cordoba"), eq("Mendoza"), eq(EstadoVuelo.PROGRAMADO), eq(false), any(Pageable.class)))
                 .thenReturn(PageMapper.tPageResponseDTO(paginaDTO));
 
         mockMvc.perform(get("/api/vuelos")
@@ -189,7 +189,7 @@ public class VueloControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.contenido.length()").value(1));
 
-        verify(vueloService).listarTodosCacehado(eq("Cordoba"), eq("Mendoza"), eq(EstadoVuelo.PROGRAMADO), any(Pageable.class));
+        verify(vueloService).listarTodosCacehado(eq("Cordoba"), eq("Mendoza"), eq(EstadoVuelo.PROGRAMADO), eq(false), any(Pageable.class));
     }
 
     @Test
