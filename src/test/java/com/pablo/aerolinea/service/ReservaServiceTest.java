@@ -87,6 +87,9 @@ public class ReservaServiceTest {
         verify(vueloRepository, times(1)).save(vuelo);
         verify(vueloService, times(1)).evictarCacheVuelo(vuelo.getId());
         verify(reservaRepository, times(1)).save(any(Reserva.class));
+        verify(emailService, times(1)).enviarAvisoReservaPendientePago(
+                usuario.getNombre(), usuario.getEmail(), vuelo.getOrigen(), vuelo.getDestino(),
+                vuelo.getFechaSalida(), resultado.getPrecioPagado());
     }
 
     @Test
@@ -96,6 +99,7 @@ public class ReservaServiceTest {
         assertThrows(RecursoNoEncontradoException.class, () -> reservaService.crearReserva(99L, 2L));
 
         verify(reservaRepository, never()).save(any());
+        verify(emailService, never()).enviarAvisoReservaPendientePago(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -108,6 +112,7 @@ public class ReservaServiceTest {
         assertThrows(RecursoNoEncontradoException.class, () -> reservaService.crearReserva(1L, 99L));
 
         verify(reservaRepository, never()).save(any());
+        verify(emailService, never()).enviarAvisoReservaPendientePago(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -122,6 +127,7 @@ public class ReservaServiceTest {
         assertThrows(ReglaDeNegocioException.class, () -> reservaService.crearReserva(1L, 2L));
 
         verify(reservaRepository, never()).save(any());
+        verify(emailService, never()).enviarAvisoReservaPendientePago(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -136,6 +142,7 @@ public class ReservaServiceTest {
         assertThrows(ReglaDeNegocioException.class, () -> reservaService.crearReserva(1L, 2L));
 
         verify(reservaRepository, never()).save(any());
+        verify(emailService, never()).enviarAvisoReservaPendientePago(any(), any(), any(), any(), any(), any());
     }
 
     @Test

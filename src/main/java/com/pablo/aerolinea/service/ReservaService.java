@@ -77,6 +77,8 @@ public class ReservaService {
                 .build();
 
         Reserva reservaGuardada = reservaRepository.save(reserva);
+        emailService.enviarAvisoReservaPendientePago(usuario.getNombre(), usuario.getEmail(),
+                vuelo.getOrigen(), vuelo.getDestino(), vuelo.getFechaSalida(), reservaGuardada.getPrecioPagado());
         return reservaGuardada;
     }
 

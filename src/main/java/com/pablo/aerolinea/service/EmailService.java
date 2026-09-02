@@ -3,6 +3,7 @@ package com.pablo.aerolinea.service;
 
 import com.pablo.aerolinea.model.Reserva;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.scheduling.annotation.Async;
@@ -22,6 +23,9 @@ public class EmailService {
     private static final DateTimeFormatter FORMATO_FECHA = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
 
     private final JavaMailSender mailSender;
+
+    @Value("${app.frontend.url}")
+    private String frontendUrl;
 
     public EmailService(JavaMailSender mailSender) {
         this.mailSender = mailSender;
@@ -105,4 +109,20 @@ public class EmailService {
         enviar(email, "Tu vuelo en AeroPass fue cancelado", cuerpo);
     }
 
+    @Async
+    public void enviarAvisoReservaPendientePago(String nombreUsuario, String email, String origen, String destino,
+                                                LocalDateTime fechaSalida, BigDecimal precioPagado) {
+        String cuerpo = """
+                Hola %s, 
+                
+                Tu reserva fue creada, pero todavía no está confirmada.
+                
+                Vuelo: %s -> %s
+                Fecha Salida: %s
+                Monto a Pagar: %s
+                
+                Para asegurar tu lugar, completá el pago desde la sección "Mis reservas": %s/mis-reservas
+                """.formatted(nombreUsuario, origen, destino, fechaSalida.format(FORMATO_FECHA), precioPagado, frontendUrl);
+        enviar(email, "Tu reserva en AeroPass está pendiente de pago", cuerpo);
+    }
 }
